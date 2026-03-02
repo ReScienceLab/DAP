@@ -300,14 +300,19 @@ export default function register(api: any) {
           type: "string",
           description: "The message content to send",
         },
+        port: {
+          type: "integer",
+          description: "The recipient peer's P2P server port (default 8099)",
+        },
       },
       required: ["ygg_addr", "message"],
     },
-    async execute(_id: string, params: { ygg_addr: string; message: string }) {
+    async execute(_id: string, params: { ygg_addr: string; message: string; port?: number }) {
       if (!identity) {
         return { content: [{ type: "text", text: "Error: P2P service not started yet." }] };
       }
-      const result = await sendP2PMessage(identity, params.ygg_addr, "chat", params.message, peerPort);
+      // Use the peer's port (default 8099) — not peerPort which is the local listening port
+      const result = await sendP2PMessage(identity, params.ygg_addr, "chat", params.message, params.port ?? 8099);
       if (result.ok) {
         return {
           content: [{ type: "text", text: `Message delivered to ${params.ygg_addr}` }],

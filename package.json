@@ -6,7 +6,9 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist",
-    "openclaw.plugin.json"
+    "openclaw.plugin.json",
+    "skills",
+    "README.md"
   ],
   "openclaw": {
     "extensions": ["./dist/index.js"],
