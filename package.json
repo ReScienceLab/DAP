@@ -1,6 +1,6 @@
 {
   "name": "@resciencelab/claw-p2p",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Direct P2P communication between OpenClaw instances over Yggdrasil IPv6",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -11,7 +11,9 @@
     "README.md"
   ],
   "openclaw": {
-    "extensions": ["./dist/index.js"],
+    "extensions": [
+      "./dist/index.js"
+    ],
     "channel": {
       "id": "ipv6-p2p",
       "label": "IPv6 P2P",
@@ -19,7 +21,11 @@
       "docsPath": "/channels/ipv6-p2p",
       "blurb": "Direct encrypted P2P messaging via Yggdrasil IPv6. No servers, no middlemen.",
       "order": 90,
-      "aliases": ["p2p", "ygg", "yggdrasil"]
+      "aliases": [
+        "p2p",
+        "ygg",
+        "yggdrasil"
+      ]
     },
     "install": {
       "npmSpec": "@resciencelab/claw-p2p",
