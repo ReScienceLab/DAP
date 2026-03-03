@@ -49,8 +49,8 @@ detect_platform() {
   esac
 
   case "$os" in
-    darwin) PLATFORM="macos"; PKG_EXT="pkg" ;;
-    linux)  PLATFORM="linux"; PKG_EXT="tar.gz" ;;
+    darwin) PLATFORM="macos" ;;
+    linux)  PLATFORM="linux" ;;
     *)      fatal "Unsupported OS: $os" ;;
   esac
   ARCH="$arch"
@@ -83,7 +83,7 @@ install_binary() {
     # Extract payload from base.pkg
     mkdir -p "${tmpdir}/extract"
     cd "${tmpdir}/extract"
-    cat "${tmpdir}/base.pkg/Payload" | gunzip | cpio -id 2>/dev/null
+    gunzip < "${tmpdir}/base.pkg/Payload" | cpio -id 2>/dev/null
 
     need_sudo cp "${tmpdir}/extract/usr/local/bin/yggdrasil" /usr/local/bin/yggdrasil
     need_sudo cp "${tmpdir}/extract/usr/local/bin/yggdrasilctl" /usr/local/bin/yggdrasilctl
