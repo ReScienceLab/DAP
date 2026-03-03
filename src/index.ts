@@ -50,6 +50,20 @@ function ensureToolsAllowed(config: any): void {
   }
 }
 
+function ensureChannelConfig(config: any): void {
+  try {
+    const channelCfg = config?.channels?.declaw
+    if (channelCfg && channelCfg.dmPolicy) return
+    execSync(`openclaw config set channels.declaw.dmPolicy '"pairing"'`, {
+      timeout: 5000,
+      stdio: "ignore",
+    })
+    console.log("[p2p] Set channels.declaw.dmPolicy to pairing")
+  } catch {
+    // best effort
+  }
+}
+
 let identity: Identity | null = null;
 let yggInfo: YggdrasilInfo | null = null;
 let dataDir: string = path.join(os.homedir(), ".openclaw", "declaw");
@@ -63,8 +77,9 @@ export default function register(api: any) {
     id: "declaw-node",
 
     start: async () => {
-      // Auto-enable DeClaw tools on first load
+      // Auto-enable DeClaw tools and channel config on first load
       ensureToolsAllowed(api.config)
+      ensureChannelConfig(api.config)
 
       const cfg: PluginConfig = api.config?.plugins?.entries?.["declaw"]?.config ?? {};
       dataDir = cfg.data_dir ?? dataDir;
@@ -85,6 +100,7 @@ export default function register(api: any) {
       }
 
       // Load or create Ed25519 identity
+      const isFirstRun = !require("fs").existsSync(path.join(dataDir, "identity.json"));
       identity = loadOrCreateIdentity(dataDir);
       initDb(dataDir);
 
@@ -121,8 +137,38 @@ export default function register(api: any) {
       // Wire incoming messages to OpenClaw gateway
       wireInboundToGateway(api);
 
-      // DHT peer discovery — delay startup to let Yggdrasil routes converge
-      const startupDelayMs = cfg.startup_delay_ms ?? 30_000;
+      // First-run welcome message
+      if (isFirstRun) {
+        const addr = yggInfo?.address ?? identity.yggIpv6;
+        const ready = yggInfo !== null;
+        const welcomeLines = [
+          "Welcome to DeClaw P2P!",
+          "",
+          ready
+            ? `Your P2P address: ${addr}`
+            : "Yggdrasil is not set up yet. Run: openclaw p2p setup",
+          "",
+          "Quick start:",
+          "  openclaw p2p status    — show your address",
+          "  openclaw p2p discover  — find peers on the network",
+          "  openclaw p2p send <addr> <msg>  — send a message",
+        ];
+        setTimeout(() => {
+          try {
+            api.gateway?.receiveChannelMessage?.({
+              channelId: "declaw",
+              accountId: "system",
+              text: welcomeLines.join("\n"),
+              senderId: "declaw-system",
+            });
+          } catch { /* best effort */ }
+        }, 2000);
+      }
+
+      // DHT peer discovery — short delay if using external daemon, longer if just spawned
+      const defaultDelay = (yggInfo && yggInfo.pid > 0) ? 30_000 : 5_000;
+      const startupDelayMs = cfg.startup_delay_ms ?? defaultDelay;
+      console.log(`[p2p] Discovery starts in ${startupDelayMs / 1000}s`);
       _startupTimer = setTimeout(async () => {
         _startupTimer = null;
         console.log(`[p2p:discovery] Starting bootstrap — identity.yggIpv6: ${identity?.yggIpv6}`);
@@ -258,7 +304,7 @@ export default function register(api: any) {
             console.error("Plugin not started. Restart the gateway first.");
             return;
           }
-          const result = await sendP2PMessage(identity, yggAddr, "chat", message, peerPort);
+          const result = await sendP2PMessage(identity, yggAddr, "chat", message, 8099);
           if (result.ok) {
             console.log(`✓ Message sent to ${yggAddr}`);
           } else {
@@ -303,22 +349,20 @@ export default function register(api: any) {
         .description("Install and configure Yggdrasil for P2P connectivity")
         .action(() => {
           const scriptPath = require("path").resolve(__dirname, "..", "scripts", "setup-yggdrasil.sh");
-          const npmScriptPath = require("path").resolve(__dirname, "..", "scripts", "setup-yggdrasil.sh");
-          const candidates = [scriptPath, npmScriptPath];
           let found = "";
-          for (const p of candidates) {
-            if (require("fs").existsSync(p)) { found = p; break; }
-          }
+          if (require("fs").existsSync(scriptPath)) found = scriptPath;
+          const isRoot = process.getuid?.() === 0;
           if (found) {
-            console.log(`Running ${found} ...`);
+            const cmd = isRoot ? `bash "${found}"` : `sudo bash "${found}"`;
+            if (!isRoot) console.log("This script requires root privileges. Requesting sudo...");
             try {
-              require("child_process").execSync(`bash "${found}"`, { stdio: "inherit" });
+              require("child_process").execSync(cmd, { stdio: "inherit" });
             } catch {
-              console.error("Setup script failed. Run manually: bash " + found);
+              console.error("Setup script failed. Run manually: sudo bash " + found);
             }
           } else {
             console.log("Yggdrasil setup script:");
-            console.log("  curl -fsSL https://raw.githubusercontent.com/ReScienceLab/DeClaw/main/scripts/setup-yggdrasil.sh | bash");
+            console.log("  curl -fsSL https://raw.githubusercontent.com/ReScienceLab/DeClaw/main/scripts/setup-yggdrasil.sh | sudo bash");
           }
         });
     },
@@ -500,75 +544,61 @@ export default function register(api: any) {
       const binaryAvailable = isYggdrasilAvailable();
       const daemonRunning = yggInfo !== null;
       const externalDaemon = !daemonRunning ? detectExternalYggdrasil() : null;
-
-      let addressType: string;
-      let routable: boolean;
-      let address: string;
-
-      if (daemonRunning && yggInfo) {
-        addressType = "yggdrasil (globally routable on the Yggdrasil network)";
-        routable = true;
-        address = yggInfo.address;
-      } else if (externalDaemon) {
-        addressType = "external yggdrasil daemon detected (not used by plugin — restart gateway)";
-        routable = false;
-        address = externalDaemon.address;
-      } else if (_testMode) {
-        addressType = "test_mode (reachable only on the local/Docker network)";
-        routable = false;
-        address = identity?.yggIpv6 ?? "unknown";
-      } else {
-        addressType = "derived_only (estimated — NOT routable without Yggdrasil)";
-        routable = false;
-        address = identity?.yggIpv6 ?? "unknown";
-      }
-
       const netInfo = binaryAvailable ? getYggdrasilNetworkInfo() : null;
 
-      const lines = [
-        `Binary installed : ${binaryAvailable ? "Yes" : "No"}`,
-        `Daemon running   : ${daemonRunning ? `Yes (pid ${yggInfo?.pid})` : "No"}`,
-        `External daemon  : ${externalDaemon ? `Yes (${externalDaemon.address})` : "No"}`,
-        `Plugin address   : ${identity?.yggIpv6 ?? "unknown"}`,
-        `Active address   : ${address}`,
-        `Address type     : ${addressType}`,
-        `Globally routable: ${routable ? "Yes" : "No"}`,
-      ];
-
-      if (netInfo) {
-        lines.push(
-          `Ygg peers        : ${netInfo.peerCount} (${netInfo.publicPeers} public)`,
-          `Routing table    : ${netInfo.routeCount} nodes`,
-        );
-        if (netInfo.publicPeers === 0) {
-          lines.push("", "WARNING: No public peers — node can only reach LAN neighbors.");
+      // Determine status: Ready, Restart needed, or Setup needed
+      if (daemonRunning && yggInfo) {
+        const lines = [
+          `Status: Ready`,
+          `Your P2P address: ${yggInfo.address}`,
+          `Known peers: ${listPeers().length}`,
+        ];
+        if (netInfo) {
+          lines.push(`Network peers: ${netInfo.peerCount} (${netInfo.publicPeers} public)`);
+          if (netInfo.publicPeers === 0) {
+            lines.push("", "Warning: No public peers — only LAN neighbors are reachable.",
+              "Run: openclaw p2p setup");
+          }
         }
+        return { content: [{ type: "text", text: lines.join("\n") }] };
       }
 
-      if (!binaryAvailable) {
-        lines.push(
+      if (externalDaemon) {
+        const lines = [
+          `Status: Restart needed`,
+          `Yggdrasil daemon is running (${externalDaemon.address}) but the plugin hasn't connected to it yet.`,
           "",
-          "ACTION REQUIRED: Yggdrasil is not installed.",
-          "Without it, your P2P address is not reachable by peers on the internet.",
-          "Install instructions: see the yggdrasil skill (references/install.md).",
-          "After installing, restart the OpenClaw gateway — the plugin will start Yggdrasil automatically."
-        );
-      } else if (externalDaemon && !daemonRunning) {
-        lines.push(
-          "",
-          "An external Yggdrasil daemon was found but the plugin is not using it.",
-          "Restart the OpenClaw gateway to pick up the external daemon's address."
-        );
-      } else if (!daemonRunning) {
-        lines.push(
-          "",
+          "Fix: Restart the OpenClaw gateway to pick up the daemon:",
+          "  launchctl kickstart -k gui/$(id -u)/ai.openclaw.gateway",
+        ];
+        return { content: [{ type: "text", text: lines.join("\n") }] };
+      }
+
+      if (binaryAvailable) {
+        const lines = [
+          `Status: Setup needed`,
           "Yggdrasil is installed but no daemon is running.",
-          "Start one with: sudo yggdrasil -useconffile /etc/yggdrasil.conf &",
-          "Or: sudo brew services start yggdrasil",
-          "Then restart the OpenClaw gateway."
-        );
+          "",
+          "Fix: Run the automated setup (installs config + starts daemon):",
+          "  openclaw p2p setup",
+          "",
+          "Then restart the gateway:",
+          "  launchctl kickstart -k gui/$(id -u)/ai.openclaw.gateway",
+        ];
+        return { content: [{ type: "text", text: lines.join("\n") }] };
       }
 
+      const lines = [
+        `Status: Setup needed`,
+        "Yggdrasil is not installed. Without it, P2P messaging won't work.",
+        "",
+        "Fix: Run the automated installer:",
+        "  openclaw p2p setup",
+        "",
+        "This installs Yggdrasil, generates a config, and starts the daemon.",
+        "After setup, restart the gateway:",
+        "  launchctl kickstart -k gui/$(id -u)/ai.openclaw.gateway",
+      ];
       return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   });
