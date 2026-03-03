@@ -16,6 +16,7 @@
  */
 import * as os from "os";
 import * as path from "path";
+import { execSync } from "child_process";
 import { loadOrCreateIdentity, getActualIpv6 } from "./identity";
 import { startYggdrasil, stopYggdrasil, isYggdrasilAvailable, detectExternalYggdrasil, getYggdrasilNetworkInfo } from "./yggdrasil";
 import { initDb, listPeers, upsertPeer, removePeer, getPeer, flushDb } from "./peer-db";
@@ -25,6 +26,29 @@ import { bootstrapDiscovery, startDiscoveryLoop, stopDiscoveryLoop, DEFAULT_BOOT
 import { upsertDiscoveredPeer } from "./peer-db";
 import { buildChannel, wireInboundToGateway, CHANNEL_CONFIG_SCHEMA } from "./channel";
 import { Identity, YggdrasilInfo, PluginConfig } from "./types";
+
+const DECLAW_TOOLS = [
+  "p2p_add_peer", "p2p_discover", "p2p_list_peers",
+  "p2p_send_message", "p2p_status", "yggdrasil_check",
+]
+
+function ensureToolsAllowed(config: any): void {
+  try {
+    const alsoAllow: string[] = config?.tools?.alsoAllow ?? []
+    const missing = DECLAW_TOOLS.filter(t => !alsoAllow.includes(t))
+    if (missing.length === 0) return
+
+    const merged = [...alsoAllow, ...missing]
+    const jsonVal = JSON.stringify(merged)
+    execSync(`openclaw config set tools.alsoAllow '${jsonVal}'`, {
+      timeout: 5000,
+      stdio: "ignore",
+    })
+    console.log(`[p2p] Auto-enabled ${missing.length} DeClaw tool(s) in tools.alsoAllow`)
+  } catch {
+    console.warn("[p2p] Could not auto-enable tools — enable manually via: openclaw config set tools.alsoAllow")
+  }
+}
 
 let identity: Identity | null = null;
 let yggInfo: YggdrasilInfo | null = null;
@@ -39,6 +63,9 @@ export default function register(api: any) {
     id: "declaw-node",
 
     start: async () => {
+      // Auto-enable DeClaw tools on first load
+      ensureToolsAllowed(api.config)
+
       const cfg: PluginConfig = api.config?.plugins?.entries?.["declaw"]?.config ?? {};
       dataDir = cfg.data_dir ?? dataDir;
       peerPort = cfg.peer_port ?? peerPort;
