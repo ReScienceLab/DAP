@@ -8,6 +8,37 @@ import { sendP2PMessage } from "./peer-client";
 import { listPeers, getPeerAddresses, upsertPeer } from "./peer-db";
 import { onMessage } from "./peer-server";
 
+/** JSON Schema for channels.declaw — required for OpenClaw Control UI config form */
+export const CHANNEL_CONFIG_SCHEMA = {
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      enabled: { type: "boolean" },
+      dmPolicy: {
+        type: "string",
+        enum: ["open", "pairing", "allowlist"],
+        default: "pairing",
+      },
+      allowFrom: {
+        type: "array",
+        items: { type: "string" },
+        description: "Yggdrasil IPv6 addresses allowed to DM (dmPolicy=allowlist)",
+      },
+    },
+  },
+  uiHints: {
+    dmPolicy: {
+      label: "DM Policy",
+      help: "open: anyone, pairing: one-time code, allowlist: specific Yggdrasil addresses only",
+    },
+    allowFrom: {
+      label: "Allow From",
+      help: "Yggdrasil IPv6 addresses permitted to send DMs (used when dmPolicy is allowlist)",
+    },
+  },
+}
+
 export function buildChannel(identity: Identity, port: number) {
   return {
     id: "declaw",
@@ -20,6 +51,7 @@ export function buildChannel(identity: Identity, port: number) {
       aliases: ["p2p", "ygg", "yggdrasil", "ipv6-p2p"],
     },
     capabilities: { chatTypes: ["direct"] },
+    configSchema: CHANNEL_CONFIG_SCHEMA,
     config: {
       /** List all known peer Yggdrasil addresses as "account IDs". */
       listAccountIds: (_cfg: unknown) => getPeerAddresses(),

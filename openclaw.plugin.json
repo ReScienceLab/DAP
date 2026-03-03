@@ -2,7 +2,7 @@
   "id": "declaw",
   "name": "DeClaw",
   "description": "Direct encrypted P2P communication between OpenClaw instances via Yggdrasil IPv6",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "channels": ["declaw"],
   "skills": ["./skills/declaw"],
   "configSchema": {

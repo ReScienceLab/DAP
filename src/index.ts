@@ -23,7 +23,7 @@ import { startPeerServer, stopPeerServer, getInbox } from "./peer-server";
 import { sendP2PMessage, pingPeer, broadcastLeave } from "./peer-client";
 import { bootstrapDiscovery, startDiscoveryLoop, stopDiscoveryLoop, DEFAULT_BOOTSTRAP_PEERS } from "./peer-discovery";
 import { upsertDiscoveredPeer } from "./peer-db";
-import { buildChannel, wireInboundToGateway } from "./channel";
+import { buildChannel, wireInboundToGateway, CHANNEL_CONFIG_SCHEMA } from "./channel";
 import { Identity, YggdrasilInfo, PluginConfig } from "./types";
 
 let identity: Identity | null = null;
@@ -138,6 +138,7 @@ export default function register(api: any) {
           aliases: ["p2p", "ygg", "ipv6-p2p"],
         },
         capabilities: { chatTypes: ["direct"] },
+        configSchema: CHANNEL_CONFIG_SCHEMA,
         config: {
           listAccountIds: () => (identity ? listPeers().map((p) => p.yggAddr) : []),
           resolveAccount: (_: unknown, accountId: string | undefined) => ({
@@ -267,6 +268,30 @@ export default function register(api: any) {
           for (const m of msgs.slice(0, 20)) {
             const time = new Date(m.receivedAt).toLocaleTimeString();
             console.log(`  [${time}] from ${m.fromYgg.slice(0, 20)}...: ${m.content}`);
+          }
+        });
+
+      p2p
+        .command("setup")
+        .description("Install and configure Yggdrasil for P2P connectivity")
+        .action(() => {
+          const scriptPath = require("path").resolve(__dirname, "..", "scripts", "setup-yggdrasil.sh");
+          const npmScriptPath = require("path").resolve(__dirname, "..", "scripts", "setup-yggdrasil.sh");
+          const candidates = [scriptPath, npmScriptPath];
+          let found = "";
+          for (const p of candidates) {
+            if (require("fs").existsSync(p)) { found = p; break; }
+          }
+          if (found) {
+            console.log(`Running ${found} ...`);
+            try {
+              require("child_process").execSync(`bash "${found}"`, { stdio: "inherit" });
+            } catch {
+              console.error("Setup script failed. Run manually: bash " + found);
+            }
+          } else {
+            console.log("Yggdrasil setup script:");
+            console.log("  curl -fsSL https://raw.githubusercontent.com/ReScienceLab/DeClaw/main/scripts/setup-yggdrasil.sh | bash");
           }
         });
     },
