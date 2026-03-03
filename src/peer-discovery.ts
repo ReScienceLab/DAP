@@ -139,13 +139,21 @@ export async function bootstrapDiscovery(
     return 0;
   }
 
-  console.log(`[p2p:discovery] Bootstrapping via ${bootstrapAddrs.length} node(s)...`);
+  console.log(`[p2p:discovery] Bootstrapping via ${bootstrapAddrs.length} node(s) (parallel)...`);
 
   let totalDiscovered = 0;
   const fanoutCandidates: string[] = [];
 
-  for (const addr of bootstrapAddrs) {
-    const peers = await announceToNode(identity, addr, port);
+  const results = await Promise.allSettled(
+    bootstrapAddrs.map(async (addr) => {
+      const peers = await announceToNode(identity, addr, port);
+      return { addr, peers };
+    })
+  );
+
+  for (const result of results) {
+    if (result.status !== "fulfilled") continue;
+    const { addr, peers } = result.value;
     if (!peers) {
       console.warn(`[p2p:discovery] Bootstrap ${addr.slice(0, 20)}... unreachable`);
       continue;
