@@ -1,6 +1,14 @@
 ---
-name: ipv6_p2p
+name: ipv6-p2p
 description: Send/receive direct encrypted P2P messages between OpenClaw agents using Yggdrasil or ULA IPv6 addresses.
+version: 0.1.0
+metadata:
+  openclaw:
+    emoji: "🔗"
+    homepage: https://github.com/ReScienceLab/claw-p2p
+    install:
+      - kind: node
+        package: "@resciencelab/claw-p2p"
 ---
 
 # IPv6 P2P Skill

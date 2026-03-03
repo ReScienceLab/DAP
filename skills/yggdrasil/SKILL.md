@@ -1,6 +1,14 @@
 ---
-name: yggdrasil_setup
+name: yggdrasil-setup
 description: Diagnose and guide Yggdrasil installation so the agent can establish globally-routable IPv6 P2P connections.
+version: 0.1.0
+metadata:
+  openclaw:
+    emoji: "🌐"
+    homepage: https://github.com/ReScienceLab/claw-p2p
+    install:
+      - kind: node
+        package: "@resciencelab/claw-p2p"
 ---
 
 # Yggdrasil Setup Skill
