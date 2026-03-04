@@ -128,13 +128,16 @@ git flow release finish <version>
 git push origin main develop --tags
 ```
 
-### Important: Features Must Use PRs
+### Important: All Changes Via PR
 
-**Never directly merge feature branches.** Always:
-1. Push feature branch to origin
-2. Create PR targeting `develop`
-3. Get review and merge via GitHub
-4. **Close the corresponding issue** when merging (use `Fixes #N` or `Closes #N` in the PR description)
+**Both `main` and `develop` are branch-protected. No direct push allowed.**
+
+1. Push feature/fix branch to origin
+2. Create PR targeting `develop` (features/fixes) or `main` (releases/hotfixes)
+3. CI must pass (`test (20)` + `test (22)`)
+4. Squash merge only — one commit per PR
+5. **Close the corresponding issue** when merging (use `Fixes #N` or `Closes #N` in the PR description)
+6. Merged branches are auto-deleted
 
 ### Commit Convention
 
@@ -168,9 +171,9 @@ When creating new issues:
 
 ## Release Process
 
-### Automated Release (`scripts/release.sh`)
+### Release Pipeline (Local + CI)
 
-One command handles the full release pipeline:
+One command kicks off the release via PR — CI handles the rest on merge:
 
 ```bash
 bash scripts/release.sh patch   # 0.2.2 → 0.2.3
@@ -178,18 +181,43 @@ bash scripts/release.sh minor   # 0.2.2 → 0.3.0
 bash scripts/release.sh major   # 0.2.2 → 1.0.0
 ```
 
-The script performs these steps automatically:
+**Local (`scripts/release.sh`):**
 1. **Preflight**: verifies on `main`, clean tree, synced with remote
 2. **Build + test**: `npm run build` + `node --test test/*.test.mjs`
-3. **Version bump**: updates all 3 version-bearing files:
-   - `package.json` + `package-lock.json` (via `npm version --no-git-tag-version`)
-   - `openclaw.plugin.json` (plugin manifest)
-   - `skills/declaw/SKILL.md` (ClawHub skill frontmatter)
-4. **Changelog check**: warns if `CHANGELOG.md` is missing a section for the new version
-5. **Commit + tag**: `chore: release vX.Y.Z` + git tag `vX.Y.Z`
-6. **Push**: main branch + tags to origin
-7. **GitHub Release**: `gh release create` with auto-generated notes → triggers npm publish via CI
-8. **Backmerge**: main → develop → push
+3. **Version bump**: syncs all 3 version-bearing files
+4. **Changelog check**: warns if `CHANGELOG.md` is missing new version section
+5. **Create Release PR**: pushes `release/vX.Y.Z` branch → creates PR targeting `main`
+
+**CI (`.github/workflows/release.yml`, triggered when `release/v*` PR merges into `main`):**
+6. **Build + test gate**: Node 20 + 22 matrix
+7. **Tag + GitHub Release**: creates `vX.Y.Z` tag + auto-generated release notes → triggers npm publish
+8. **ClawHub publish**: `npx clawhub@latest publish` with `CLAWHUB_TOKEN` secret
+9. **Backmerge**: main → develop (via github-actions bot)
+
+### CI Workflows
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `release.yml` | Release PR merged into `main` | Verify → Tag → GH Release → ClawHub → Backmerge |
+| `publish.yml` | GH Release published | npm publish with `NPM_TOKEN` |
+| `test.yml` | Push/PR to main/develop | Build + test (Node 20+22) |
+| `auto-close-issues.yml` | PR merged | Close linked issues |
+| `bootstrap-health.yml` | Scheduled | Ping all 5 bootstrap nodes |
+
+### Branch Protection
+
+Both `main` and `develop` are protected:
+- **No direct push** — all changes via PR (squash merge only)
+- **Required CI**: `test (20)` + `test (22)` must pass
+- **No force push** or branch deletion
+- **Enforced for admins** — no bypass
+
+### Repo Security
+
+- **Secret scanning + push protection**: enabled (GitHub catches leaked tokens)
+- **Squash merge only**: one commit per PR, clean history
+- **Auto-delete branches**: merged PR branches are cleaned up automatically
+- **Required secrets**: `NPM_TOKEN` (npm), `CLAWHUB_TOKEN` (ClawHub)
 
 ### Pre-release: Update CHANGELOG
 
@@ -197,18 +225,6 @@ Before running the release script, update `CHANGELOG.md`:
 - Add a `[X.Y.Z] - YYYY-MM-DD` section
 - Categorize entries: `Breaking Changes`, `Added`, `Changed`, `Fixed`
 - Reference issues and PRs (e.g., `PR #8`, `Closes #7`)
-
-### Post-release Checklist
-
-The script prints these reminders after release:
-1. Verify npm: `https://www.npmjs.com/package/@resciencelab/declaw`
-2. Publish skill: `npx clawhub@latest publish skills/declaw`
-3. Deploy bootstrap if `bootstrap/server.mjs` changed (see below)
-
-### ClawHub Skill Publish
-- Verify login: `npx clawhub@latest whoami`
-- Publish: `npx clawhub@latest publish skills/declaw`
-- Version is already synced by the release script
 
 ### Bootstrap Node Deployment
 - Only needed when `bootstrap/server.mjs` or `bootstrap/package.json` changes
