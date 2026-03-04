@@ -7,7 +7,7 @@ OpenClaw plugin for direct P2P communication between agent instances over Yggdra
 - Build: `npm run build`
 - Run tests: `node --test test/*.test.mjs`
 - Dev (watch mode): `npm run dev`
-- Publish to npm: triggered by GitHub release (see `.github/workflows/`)
+- Release: `bash scripts/release.sh patch|minor|major`
 - Publish skill to ClawHub: `npx clawhub@latest publish skills/declaw`
 
 Always run build before tests — tests import from `dist/`.
@@ -168,28 +168,80 @@ When creating new issues:
 
 ## Release Process
 
-### Release Checklist
+### Automated Release (`scripts/release.sh`)
 
-1. Ensure all changes committed and tests pass: `npm run build && node --test test/*.test.mjs`
-2. Update `CHANGELOG.md`:
-   - Move items from `[Unreleased]` to the new version section
-   - Add release date in format `[X.Y.Z] - YYYY-MM-DD`
-   - Categorize: `Breaking Changes`, `Added`, `Changed`, `Fixed`
-   - **Reference issues and PRs** in entries (e.g., `Issue #63`, `PR #64`)
-3. Bump version: `npm version patch|minor|major` (creates git tag `vX.Y.Z`)
-4. Push with tags: `git push origin main develop --tags`
-5. Create GitHub release: `gh release create vX.Y.Z --generate-notes`
-6. GitHub Actions (`.github/workflows/publish.yml`) auto-publishes to npm on release
+One command handles the full release pipeline:
+
+```bash
+bash scripts/release.sh patch   # 0.2.2 → 0.2.3
+bash scripts/release.sh minor   # 0.2.2 → 0.3.0
+bash scripts/release.sh major   # 0.2.2 → 1.0.0
+```
+
+The script performs these steps automatically:
+1. **Preflight**: verifies on `main`, clean tree, synced with remote
+2. **Build + test**: `npm run build` + `node --test test/*.test.mjs`
+3. **Version bump**: updates all 3 version-bearing files:
+   - `package.json` + `package-lock.json` (via `npm version --no-git-tag-version`)
+   - `openclaw.plugin.json` (plugin manifest)
+   - `skills/declaw/SKILL.md` (ClawHub skill frontmatter)
+4. **Changelog check**: warns if `CHANGELOG.md` is missing a section for the new version
+5. **Commit + tag**: `chore: release vX.Y.Z` + git tag `vX.Y.Z`
+6. **Push**: main branch + tags to origin
+7. **GitHub Release**: `gh release create` with auto-generated notes → triggers npm publish via CI
+8. **Backmerge**: main → develop → push
+
+### Pre-release: Update CHANGELOG
+
+Before running the release script, update `CHANGELOG.md`:
+- Add a `[X.Y.Z] - YYYY-MM-DD` section
+- Categorize entries: `Breaking Changes`, `Added`, `Changed`, `Fixed`
+- Reference issues and PRs (e.g., `PR #8`, `Closes #7`)
+
+### Post-release Checklist
+
+The script prints these reminders after release:
+1. Verify npm: `https://www.npmjs.com/package/@resciencelab/declaw`
+2. Publish skill: `npx clawhub@latest publish skills/declaw`
+3. Deploy bootstrap if `bootstrap/server.mjs` changed (see below)
 
 ### ClawHub Skill Publish
 - Verify login: `npx clawhub@latest whoami`
 - Publish: `npx clawhub@latest publish skills/declaw`
-- Skill version in `SKILL.md` frontmatter must match `package.json` version
+- Version is already synced by the release script
 
 ### Bootstrap Node Deployment
-- Only needed when `bootstrap/server.mjs` changes (client-side optimizations skip this)
-- Deploy via AWS SSM (no SSH): `base64 -i bootstrap/server.mjs` → SSM send-command to all 5 instances → restart systemd
-- Verify each node: `curl -s http://[node-ygg-addr]:8099/health`
+- Only needed when `bootstrap/server.mjs` or `bootstrap/package.json` changes
+- Deploy via AWS SSM (no SSH):
+  ```bash
+  B64=$(base64 -i bootstrap/server.mjs)
+  for pair in "i-04670f4d1a72c7d5d:us-east-2" "i-096ba79b9ae854339:us-west-2" \
+    "i-084242224f1a49b13:eu-west-1" "i-0b909aacd92097e43:ap-northeast-1" \
+    "i-0141cd0f56a902978:ap-southeast-1"; do
+    IID=${pair%%:*}; REGION=${pair##*:}
+    aws ssm send-command --instance-ids $IID --region $REGION \
+      --document-name "AWS-RunShellScript" \
+      --parameters "{\"commands\":[\"echo '${B64}' | base64 -d > /opt/declaw-bootstrap/server.mjs\",\"systemctl restart declaw-bootstrap\"]}" \
+      --query 'Command.CommandId' --output text
+    echo "$REGION: deployed"
+  done
+  ```
+- If `bootstrap/package.json` also changed (e.g., dependency upgrade), deploy it too and run `npm install`:
+  ```bash
+  B64_PKG=$(base64 -i bootstrap/package.json)
+  # same loop, but commands: decode package.json + cd + npm install + restart
+  ```
+- Verify: `curl -s http://[node-ygg-addr]:8099/peer/ping`
+
+### Version-bearing Files
+
+These files must always have matching versions (handled by `scripts/release.sh`):
+| File | Field |
+|---|---|
+| `package.json` | `"version"` (canonical source) |
+| `package-lock.json` | `"version"` (auto-updated by `npm version`) |
+| `openclaw.plugin.json` | `"version"` |
+| `skills/declaw/SKILL.md` | `version:` in YAML frontmatter |
 
 ### Versioning
 

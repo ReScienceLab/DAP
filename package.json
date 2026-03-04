@@ -36,6 +36,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "release": "bash scripts/release.sh",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
