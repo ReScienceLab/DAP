@@ -125,7 +125,7 @@ export default function register(api: any) {
       const bootstrapPeers = _bootstrapPeers;
       const discoveryIntervalMs: number = cfg.discovery_interval_ms ?? 10 * 60 * 1000;
       const pluginVersion: string = require("../package.json").version;
-      _agentMeta = { name: cfg.agent_name, version: pluginVersion };
+      _agentMeta = { name: cfg.agent_name ?? api.config?.identity?.name, version: pluginVersion };
 
       // Resolve test_mode: "auto" (default) detects Yggdrasil availability
       const rawTestMode = cfg.test_mode ?? "auto";
