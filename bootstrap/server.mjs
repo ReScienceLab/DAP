@@ -175,7 +175,9 @@ function checkRateLimit(addr) {
   return true;
 }
 
-async function sendMessage(toYggAddr, content) {
+const PEER_DEFAULT_PORT = 8099; // standard DeClaw peer port (recipients may differ from our PORT)
+
+async function sendMessage(toYggAddr, content, toPort = PEER_DEFAULT_PORT) {
   if (!_selfYggAddr) return;
   const payload = {
     fromYgg: _selfYggAddr,
@@ -190,7 +192,7 @@ async function sendMessage(toYggAddr, content) {
   );
   const msg = { ...payload, signature: Buffer.from(sig).toString("base64") };
   try {
-    await fetch(`http://[${toYggAddr}]:${PORT}/peer/message`, {
+    await fetch(`http://[${toYggAddr}]:${toPort}/peer/message`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(msg),
@@ -231,9 +233,30 @@ async function callKimi(userMessage) {
 }
 
 // ---------------------------------------------------------------------------
-// Bootstrap
+// Bootstrap identity (must be initialized before server routes are registered)
 // ---------------------------------------------------------------------------
 fs.mkdirSync(DATA_DIR, { recursive: true });
+
+const idFile = path.join(DATA_DIR, "bootstrap-identity.json");
+let selfKeypair;
+if (fs.existsSync(idFile)) {
+  const saved = JSON.parse(fs.readFileSync(idFile, "utf8"));
+  selfKeypair = nacl.sign.keyPair.fromSeed(Buffer.from(saved.seed, "base64"));
+} else {
+  const seed = nacl.randomBytes(32);
+  selfKeypair = nacl.sign.keyPair.fromSeed(seed);
+  fs.writeFileSync(idFile, JSON.stringify({
+    seed: Buffer.from(seed).toString("base64"),
+    publicKey: Buffer.from(selfKeypair.publicKey).toString("base64"),
+  }, null, 2));
+}
+const selfPubB64 = Buffer.from(selfKeypair.publicKey).toString("base64");
+let _selfYggAddr = null;
+let _agentName = process.env.AGENT_NAME ?? "DeClaw Bootstrap Node";
+
+// ---------------------------------------------------------------------------
+// Peer DB + pruning
+// ---------------------------------------------------------------------------
 loadPeers();
 setInterval(savePeers, PERSIST_INTERVAL_MS);
 // Prune peers not directly seen for 48h (protect sibling bootstrap nodes)
@@ -345,13 +368,15 @@ server.post("/peer/message", async (req, reply) => {
 
   console.log(`[bootstrap] ← message from=${msg.fromYgg.slice(0, 22)}... event=${msg.event}`);
 
-  // Accept immediately; reply is async
-  reply.send({ ok: true });
-
   if (!checkRateLimit(msg.fromYgg)) {
+    const retryAfterSec = Math.ceil(RATE_LIMIT_WINDOW_MS / 1000);
     console.log(`[bootstrap] rate-limited ${msg.fromYgg.slice(0, 22)}...`);
-    return;
+    reply.header("Retry-After", String(retryAfterSec));
+    return reply.code(429).send({ error: "Rate limit exceeded", retryAfterSec });
   }
+
+  // Accept immediately; Kimi reply is sent async
+  reply.send({ ok: true });
 
   const replyText = await callKimi(msg.content);
   if (replyText) await sendMessage(msg.fromYgg, replyText);
@@ -368,24 +393,6 @@ console.log(`[bootstrap] Data dir: ${DATA_DIR}`);
 const BOOTSTRAP_JSON_URL =
   "https://resciencelab.github.io/DeClaw/bootstrap.json";
 const SYNC_INTERVAL_MS = parseInt(process.env.SYNC_INTERVAL_MS ?? String(5 * 60 * 1000));
-
-// Generate a persistent identity for this bootstrap node
-const idFile = path.join(DATA_DIR, "bootstrap-identity.json");
-let selfKeypair;
-if (fs.existsSync(idFile)) {
-  const saved = JSON.parse(fs.readFileSync(idFile, "utf8"));
-  selfKeypair = nacl.sign.keyPair.fromSeed(Buffer.from(saved.seed, "base64"));
-} else {
-  const seed = nacl.randomBytes(32);
-  selfKeypair = nacl.sign.keyPair.fromSeed(seed);
-  fs.writeFileSync(idFile, JSON.stringify({
-    seed: Buffer.from(seed).toString("base64"),
-    publicKey: Buffer.from(selfKeypair.publicKey).toString("base64"),
-  }, null, 2));
-}
-const selfPubB64 = Buffer.from(selfKeypair.publicKey).toString("base64");
-let _selfYggAddr = null;
-let _agentName = process.env.AGENT_NAME ?? null;
 
 async function getSelfYggAddr() {
   try {
@@ -423,9 +430,9 @@ async function syncWithSiblings() {
     console.warn("[bootstrap:sync] Could not determine own Yggdrasil address — skipping");
     return;
   }
-  // Cache for /peer/announce response self metadata
+  // Cache self Ygg address; refine agent name with actual address once known
   _selfYggAddr = selfAddr;
-  if (!_agentName) _agentName = `ReScience Lab's bootstrap-${selfAddr.slice(0, 12)}`;
+  if (!process.env.AGENT_NAME) _agentName = `ReScience Lab's bootstrap-${selfAddr.slice(0, 12)}`;
 
   const siblings = (await fetchSiblingAddrs()).filter((a) => a !== selfAddr);
   if (siblings.length === 0) return;

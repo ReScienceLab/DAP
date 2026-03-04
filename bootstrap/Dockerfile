@@ -1,5 +1,7 @@
 FROM node:22-alpine
 
+RUN apk add --no-cache aws-cli
+
 WORKDIR /app
 
 COPY package.json .
