@@ -6,6 +6,7 @@
  *   GET  /peer/ping     — health check
  *   GET  /peer/peers    — return known peer list
  *   POST /peer/announce — accept signed peer announcement, return our peer list
+ *   POST /peer/message  — receive a signed P2P message; reply via Kimi AI (rate-limited)
  */
 import Fastify from "fastify";
 import nacl from "tweetnacl";
@@ -18,6 +19,15 @@ const TEST_MODE = process.env.TEST_MODE === "true";
 const MAX_PEERS = 500;
 const AGENT_VERSION = process.env.AGENT_VERSION ?? "1.0.0";
 const PERSIST_INTERVAL_MS = 30_000;
+
+const KIMI_REGION = process.env.AWS_REGION ?? "us-east-2";
+const KIMI_SSM_PARAM = process.env.KIMI_SSM_PARAM ?? "/declaw/kimi-api-key";
+const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX ?? "10");
+const RATE_LIMIT_WINDOW_MS = parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? String(60 * 60 * 1000));
+
+let kimiApiKey = process.env.KIMI_API_KEY ?? null;
+const rateLimits = new Map(); // yggAddr -> { count, windowStart }
+const tofuCache = new Map();  // yggAddr -> publicKey b64
 
 // ---------------------------------------------------------------------------
 // Peer DB (in-memory + JSON persistence)
@@ -134,9 +144,119 @@ function isYggdrasilAddr(addr) {
 }
 
 // ---------------------------------------------------------------------------
-// Bootstrap
+// Kimi bot helpers
+// ---------------------------------------------------------------------------
+
+async function loadKimiKey() {
+  if (kimiApiKey) return;
+  try {
+    const { execSync } = await import("child_process");
+    const out = execSync(
+      `aws ssm get-parameter --name "${KIMI_SSM_PARAM}" --with-decryption --region ${KIMI_REGION} --query Parameter.Value --output text`,
+      { encoding: "utf8", timeout: 10_000 }
+    );
+    kimiApiKey = out.trim();
+    console.log("[bootstrap] Kimi API key loaded from SSM");
+  } catch (e) {
+    console.warn("[bootstrap] Could not load Kimi key from SSM:", e.message);
+  }
+}
+
+function checkRateLimit(addr) {
+  const now = Date.now();
+  const rec = rateLimits.get(addr) ?? { count: 0, windowStart: now };
+  if (now - rec.windowStart > RATE_LIMIT_WINDOW_MS) {
+    rec.count = 0;
+    rec.windowStart = now;
+  }
+  if (rec.count >= RATE_LIMIT_MAX) return false;
+  rec.count++;
+  rateLimits.set(addr, rec);
+  return true;
+}
+
+const PEER_DEFAULT_PORT = 8099; // standard DeClaw peer port (recipients may differ from our PORT)
+
+async function sendMessage(toYggAddr, content, toPort = PEER_DEFAULT_PORT) {
+  if (!_selfYggAddr) return;
+  const payload = {
+    fromYgg: _selfYggAddr,
+    publicKey: selfPubB64,
+    event: "chat",
+    content,
+    timestamp: Date.now(),
+  };
+  const sig = nacl.sign.detached(
+    Buffer.from(JSON.stringify(canonicalize(payload))),
+    selfKeypair.secretKey
+  );
+  const msg = { ...payload, signature: Buffer.from(sig).toString("base64") };
+  try {
+    await fetch(`http://[${toYggAddr}]:${toPort}/peer/message`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(msg),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {}
+}
+
+async function callKimi(userMessage) {
+  if (!kimiApiKey) return null;
+  try {
+    const resp = await fetch("https://api.moonshot.cn/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${kimiApiKey}`,
+      },
+      body: JSON.stringify({
+        model: "moonshot-v1-8k",
+        messages: [
+          {
+            role: "system",
+            content: `You are a friendly AI assistant deployed on the DeClaw P2P network — an open-source project enabling direct encrypted messaging between AI agents over Yggdrasil IPv6. Your name is "${_agentName ?? "DeClaw Bootstrap Node"}". You are an always-on node to help new users get started. Keep replies concise (under 150 words). If asked how to find more peers, tell users to run: openclaw p2p discover`,
+          },
+          { role: "user", content: userMessage },
+        ],
+        max_tokens: 300,
+      }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data.choices?.[0]?.message?.content ?? null;
+  } catch (e) {
+    console.warn("[bootstrap] Kimi API error:", e.message);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bootstrap identity (must be initialized before server routes are registered)
 // ---------------------------------------------------------------------------
 fs.mkdirSync(DATA_DIR, { recursive: true });
+
+const idFile = path.join(DATA_DIR, "bootstrap-identity.json");
+let selfKeypair;
+if (fs.existsSync(idFile)) {
+  const saved = JSON.parse(fs.readFileSync(idFile, "utf8"));
+  selfKeypair = nacl.sign.keyPair.fromSeed(Buffer.from(saved.seed, "base64"));
+} else {
+  const seed = nacl.randomBytes(32);
+  selfKeypair = nacl.sign.keyPair.fromSeed(seed);
+  fs.writeFileSync(idFile, JSON.stringify({
+    seed: Buffer.from(seed).toString("base64"),
+    publicKey: Buffer.from(selfKeypair.publicKey).toString("base64"),
+  }, null, 2));
+}
+const selfPubB64 = Buffer.from(selfKeypair.publicKey).toString("base64");
+let _selfYggAddr = null;
+let _agentName = process.env.AGENT_NAME ?? "DeClaw Bootstrap Node";
+
+// ---------------------------------------------------------------------------
+// Peer DB + pruning
+// ---------------------------------------------------------------------------
 loadPeers();
 setInterval(savePeers, PERSIST_INTERVAL_MS);
 // Prune peers not directly seen for 48h (protect sibling bootstrap nodes)
@@ -211,6 +331,58 @@ server.post("/peer/announce", async (req, reply) => {
   return { ok: true, ...(self ? { self } : {}), peers: getPeersForExchange(50) };
 });
 
+server.post("/peer/message", async (req, reply) => {
+  const msg = req.body;
+  if (!msg || typeof msg !== "object") {
+    return reply.code(400).send({ error: "Invalid body" });
+  }
+  const srcIp = req.socket.remoteAddress ?? "";
+
+  if (!TEST_MODE) {
+    if (!isYggdrasilAddr(srcIp)) {
+      return reply.code(403).send({ error: "Source must be a Yggdrasil address (200::/8)" });
+    }
+    const normalizedSrc = srcIp.replace(/^::ffff:/, "");
+    if (msg.fromYgg !== normalizedSrc) {
+      return reply.code(403).send({ error: `fromYgg ${msg.fromYgg} does not match TCP source ${normalizedSrc}` });
+    }
+  }
+
+  const { signature, ...signable } = msg;
+  if (!verifySignature(msg.publicKey, signable, signature)) {
+    return reply.code(403).send({ error: "Invalid Ed25519 signature" });
+  }
+
+  // TOFU
+  const cachedKey = tofuCache.get(msg.fromYgg);
+  if (cachedKey && cachedKey !== msg.publicKey) {
+    return reply.code(403).send({ error: "Public key mismatch (TOFU)" });
+  }
+  tofuCache.set(msg.fromYgg, msg.publicKey);
+
+  // Signed leave tombstone
+  if (msg.event === "leave") {
+    peers.delete(msg.fromYgg);
+    return { ok: true };
+  }
+
+  console.log(`[bootstrap] ← message from=${msg.fromYgg.slice(0, 22)}... event=${msg.event}`);
+
+  if (!checkRateLimit(msg.fromYgg)) {
+    const retryAfterSec = Math.ceil(RATE_LIMIT_WINDOW_MS / 1000);
+    console.log(`[bootstrap] rate-limited ${msg.fromYgg.slice(0, 22)}...`);
+    reply.header("Retry-After", String(retryAfterSec));
+    return reply.code(429).send({ error: "Rate limit exceeded", retryAfterSec });
+  }
+
+  // Accept immediately; Kimi reply is sent async
+  reply.send({ ok: true });
+
+  const replyText = await callKimi(msg.content);
+  if (replyText) await sendMessage(msg.fromYgg, replyText);
+});
+
+await loadKimiKey();
 await server.listen({ port: PORT, host: "::" });
 console.log(`[bootstrap] Listening on [::]:${PORT}${TEST_MODE ? " (test mode)" : ""}`);
 console.log(`[bootstrap] Data dir: ${DATA_DIR}`);
@@ -221,24 +393,6 @@ console.log(`[bootstrap] Data dir: ${DATA_DIR}`);
 const BOOTSTRAP_JSON_URL =
   "https://resciencelab.github.io/DeClaw/bootstrap.json";
 const SYNC_INTERVAL_MS = parseInt(process.env.SYNC_INTERVAL_MS ?? String(5 * 60 * 1000));
-
-// Generate a persistent identity for this bootstrap node
-const idFile = path.join(DATA_DIR, "bootstrap-identity.json");
-let selfKeypair;
-if (fs.existsSync(idFile)) {
-  const saved = JSON.parse(fs.readFileSync(idFile, "utf8"));
-  selfKeypair = nacl.sign.keyPair.fromSeed(Buffer.from(saved.seed, "base64"));
-} else {
-  const seed = nacl.randomBytes(32);
-  selfKeypair = nacl.sign.keyPair.fromSeed(seed);
-  fs.writeFileSync(idFile, JSON.stringify({
-    seed: Buffer.from(seed).toString("base64"),
-    publicKey: Buffer.from(selfKeypair.publicKey).toString("base64"),
-  }, null, 2));
-}
-const selfPubB64 = Buffer.from(selfKeypair.publicKey).toString("base64");
-let _selfYggAddr = null;
-let _agentName = process.env.AGENT_NAME ?? null;
 
 async function getSelfYggAddr() {
   try {
@@ -276,9 +430,9 @@ async function syncWithSiblings() {
     console.warn("[bootstrap:sync] Could not determine own Yggdrasil address — skipping");
     return;
   }
-  // Cache for /peer/announce response self metadata
+  // Cache self Ygg address; refine agent name with actual address once known
   _selfYggAddr = selfAddr;
-  if (!_agentName) _agentName = `ReScience Lab's bootstrap-${selfAddr.slice(0, 12)}`;
+  if (!process.env.AGENT_NAME) _agentName = `ReScience Lab's bootstrap-${selfAddr.slice(0, 12)}`;
 
   const siblings = (await fetchSiblingAddrs()).filter((a) => a !== selfAddr);
   if (siblings.length === 0) return;
