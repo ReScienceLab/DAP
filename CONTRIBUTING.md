@@ -50,24 +50,29 @@ Look for issues labeled [`good first issue`](https://github.com/ReScienceLab/DeC
 
 ### Submitting Code
 
-1. Fork the repo and create a branch from `develop`:
+1. Fork the repo and create a branch from `main`:
    ```bash
-   git checkout develop
+   git checkout main
    git checkout -b feature/your-feature
    ```
 
 2. Make your changes, following the conventions below
 
-3. Build and test:
+3. Add a changeset describing what changed:
+   ```bash
+   npx changeset add
+   ```
+
+4. Build and test:
    ```bash
    npm run build
    node --test test/*.test.mjs
    ```
 
-4. Push and create a PR targeting `develop`:
+5. Push and create a PR targeting `main`:
    ```bash
    git push -u origin feature/your-feature
-   gh pr create --base develop
+   gh pr create --base main
    ```
 
 5. Wait for CI (Node 20+22 test matrix) to pass. All PRs are squash-merged.

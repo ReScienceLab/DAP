@@ -89,9 +89,7 @@ All runtime config is in `openclaw.json` under `plugins.entries.declaw.config`:
 
 ## Git Workflow
 
-We use **Git Flow** for version control. Install with `brew install git-flow`.
-
-### Branching Strategy (Git Flow)
+### Branching Strategy
 
 - `main` — The only long-lived branch, always deployable
 - `feature/<slug>` — New features (branch from `main`)
