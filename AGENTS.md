@@ -7,7 +7,7 @@ OpenClaw plugin for direct P2P communication between agent instances over Yggdra
 - Build: `npm run build`
 - Run tests: `node --test test/*.test.mjs`
 - Dev (watch mode): `npm run dev`
-- Release: `bash scripts/release.sh patch|minor|major`
+- Add changeset: `npx changeset add`
 - Publish skill to ClawHub: `npx clawhub@latest publish skills/declaw`
 
 Always run build before tests — tests import from `dist/`.
@@ -149,11 +149,9 @@ When creating new issues:
 
 1. All tests must pass: `npm run build && node --test test/*.test.mjs`
 2. TypeScript must compile: `npm run build`
-3. Feature branches merge to `develop` via PR
-4. Hotfix branches merge to both `main` and `develop`
-5. Releases: `develop` → `main` via PR
-6. Reference the issue number in the PR description (e.g., `#123`)
-7. Use closing keywords to auto-close issues on merge (e.g., `Fixes #123`, `Closes #123`)
+3. Feature/fix branches merge to `main` via PR
+4. Reference the issue number in the PR description (e.g., `#123`)
+5. Use closing keywords to auto-close issues on merge (e.g., `Fixes #123`, `Closes #123`)
 
 ## Release Process
 
@@ -268,7 +266,7 @@ When adding a changeset, choose accordingly.
 
 ### Version-bearing Files
 
-These files must always have matching versions (handled by `scripts/release.sh`):
+These files must always have matching versions (synced automatically by `scripts/sync-version.mjs` during `npm run version`):
 | File | Field |
 |---|---|
 | `package.json` | `"version"` (canonical source) |
