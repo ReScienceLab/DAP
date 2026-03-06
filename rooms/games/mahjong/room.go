@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	claimTimeout = 8 * time.Second
+	claimTimeout = 30 * time.Second
 	turnTimeout  = 15 * time.Second
 )
 
