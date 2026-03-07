@@ -1,11 +1,11 @@
 /**
  * OpenClaw channel registration for DeClaw P2P messaging.
- *
- * v2: account IDs are agentIds (not yggAddrs).
+ * Account IDs are agentIds.
  */
 import { Identity } from "./types"
 import { sendP2PMessage, SendOptions } from "./peer-client"
 import { listPeers, getPeerIds, getPeer } from "./peer-db"
+import { getEndpointAddress } from "./peer-db"
 import { onMessage } from "./peer-server"
 
 export const CHANNEL_CONFIG_SCHEMA = {
@@ -22,7 +22,7 @@ export const CHANNEL_CONFIG_SCHEMA = {
       allowFrom: {
         type: "array",
         items: { type: "string" },
-        description: "Agent IDs or Yggdrasil IPv6 addresses allowed to DM (dmPolicy=allowlist)",
+        description: "Agent IDs allowed to DM (dmPolicy=allowlist)",
       },
     },
   },
@@ -33,7 +33,7 @@ export const CHANNEL_CONFIG_SCHEMA = {
     },
     allowFrom: {
       label: "Allow From",
-      help: "Agent IDs (or legacy Yggdrasil addresses) permitted to send DMs",
+      help: "Agent IDs permitted to send DMs",
     },
   },
 }
@@ -59,19 +59,20 @@ export function buildChannel(identity: Identity, port: number, getSendOpts?: (id
         return {
           accountId: id,
           agentId: peer?.agentId ?? id,
-          yggAddr: peer?.yggAddr ?? id,
           alias: peer?.alias ?? id,
         }
       },
     },
     outbound: {
       deliveryMode: "direct" as const,
-      sendText: async ({ text, account }: { text: string; account: { agentId?: string; yggAddr?: string } }) => {
-        const targetAddr = account.yggAddr ?? account.agentId ?? ""
-        const opts = getSendOpts?.(targetAddr)
+      sendText: async ({ text, account }: { text: string; account: { agentId?: string } }) => {
+        const agentId = account.agentId ?? ""
+        const peer = getPeer(agentId)
+        const targetAddr = (peer ? getEndpointAddress(peer, "yggdrasil") : null) ?? agentId
+        const opts = getSendOpts?.(agentId)
         const result = await sendP2PMessage(identity, targetAddr, "chat", text, port, 10_000, opts)
         if (!result.ok) {
-          console.error(`[declaw] Failed to send to ${targetAddr}: ${result.error}`)
+          console.error(`[declaw] Failed to send to ${agentId}: ${result.error}`)
         }
         return { ok: result.ok }
       },
@@ -79,10 +80,6 @@ export function buildChannel(identity: Identity, port: number, getSendOpts?: (id
   }
 }
 
-/**
- * Wire incoming P2P messages to the OpenClaw gateway.
- * v2: sender is identified by agentId (`msg.from`).
- */
 export function wireInboundToGateway(api: any): void {
   onMessage((msg) => {
     if (msg.event !== "chat") return

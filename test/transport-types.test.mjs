@@ -1,9 +1,8 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { isV1Message, isV1Announcement } from "../dist/types.js"
 
 describe("v2 PeerAnnouncement format", () => {
-  it("v2 announcement has from (agentId) and endpoints with port/ttl", () => {
+  it("announcement has from (agentId) and endpoints with port/ttl", () => {
     const announcement = {
       from: "abcdef1234567890",
       publicKey: "test-key",
@@ -33,15 +32,17 @@ describe("v2 PeerAnnouncement format", () => {
     assert.equal(announcement.peers[0].agentId, "1234567890abcdef")
   })
 
-  it("v1 compat: fromYgg still accepted", () => {
-    const v1Ann = {
-      fromYgg: "200::1",
+  it("P2PMessage uses from (agentId), no fromYgg", () => {
+    const msg = {
+      from: "abcdef1234567890",
       publicKey: "test-key",
+      event: "chat",
+      content: "hello",
       timestamp: Date.now(),
       signature: "sig",
-      peers: [],
     }
-    assert.equal(v1Ann.fromYgg, "200::1")
+    assert.equal(msg.from, "abcdef1234567890")
+    assert.equal(msg.fromYgg, undefined)
   })
 
   it("PluginConfig supports quic_port", () => {
@@ -52,27 +53,5 @@ describe("v2 PeerAnnouncement format", () => {
       test_mode: "auto",
     }
     assert.equal(config.quic_port, 8098)
-  })
-})
-
-describe("isV1Message / isV1Announcement", () => {
-  it("detects v1 message (has fromYgg, no from)", () => {
-    assert.equal(isV1Message({ fromYgg: "200::1", publicKey: "pk" }), true)
-  })
-
-  it("detects v2 message (has from, no fromYgg)", () => {
-    assert.equal(isV1Message({ from: "abc123", publicKey: "pk" }), false)
-  })
-
-  it("detects v2 message (has both from and fromYgg)", () => {
-    assert.equal(isV1Message({ from: "abc123", fromYgg: "200::1", publicKey: "pk" }), false)
-  })
-
-  it("detects v1 announcement (has fromYgg, no from)", () => {
-    assert.equal(isV1Announcement({ fromYgg: "200::1", publicKey: "pk" }), true)
-  })
-
-  it("detects v2 announcement (has from)", () => {
-    assert.equal(isV1Announcement({ from: "abc123", publicKey: "pk" }), false)
   })
 })

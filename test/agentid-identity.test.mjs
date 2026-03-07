@@ -48,39 +48,34 @@ describe("deriveDidKey", () => {
   })
 })
 
-describe("generateIdentity (v2)", () => {
+describe("generateIdentity", () => {
   it("includes agentId field", () => {
     const id = generateIdentity()
     assert.ok(id.agentId)
     assert.equal(id.agentId.length, 16)
   })
 
-  it("still includes cgaIpv6 and yggIpv6 for backward compat", () => {
+  it("does not include cgaIpv6 or yggIpv6 (transport-layer concerns)", () => {
     const id = generateIdentity()
-    assert.ok(id.cgaIpv6)
-    assert.ok(id.yggIpv6)
+    assert.equal(id.cgaIpv6, undefined)
+    assert.equal(id.yggIpv6, undefined)
   })
 })
 
-describe("loadOrCreateIdentity v1 migration", () => {
-  it("adds agentId to a v1 identity file on load", () => {
+describe("loadOrCreateIdentity", () => {
+  it("adds agentId to a legacy identity file on load", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "declaw-test-"))
     const idFile = path.join(tmpDir, "identity.json")
-
-    // Write a v1 identity (no agentId)
-    const v1 = {
+    const legacy = {
       publicKey: "dGVzdHB1YmtleQ==",
       privateKey: "dGVzdHByaXZrZXk=",
-      cgaIpv6: "fd00::1",
-      yggIpv6: "200::1",
     }
-    fs.writeFileSync(idFile, JSON.stringify(v1))
+    fs.writeFileSync(idFile, JSON.stringify(legacy))
 
     const loaded = loadOrCreateIdentity(tmpDir)
-    assert.ok(loaded.agentId, "agentId should be added during migration")
+    assert.ok(loaded.agentId)
     assert.equal(loaded.agentId.length, 16)
 
-    // Verify it was persisted
     const persisted = JSON.parse(fs.readFileSync(idFile, "utf-8"))
     assert.equal(persisted.agentId, loaded.agentId)
 
@@ -90,7 +85,6 @@ describe("loadOrCreateIdentity v1 migration", () => {
   it("does not overwrite existing agentId", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "declaw-test-"))
     const idFile = path.join(tmpDir, "identity.json")
-
     const existing = generateIdentity()
     fs.writeFileSync(idFile, JSON.stringify(existing))
 

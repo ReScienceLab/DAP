@@ -12,11 +12,10 @@ import * as path from "path"
 import * as os from "os"
 import { Identity } from "./types"
 
-// ── Address derivation (legacy, kept for Yggdrasil transport) ───────────────
+// ── Address derivation (used by Yggdrasil transport) ────────────────────────
 
 const ULA_PREFIX = Buffer.from("fd00deadbeef0000", "hex")
 
-/** @deprecated CGA address derivation — Yggdrasil-specific. */
 export function deriveCgaIpv6(publicKeyBytes: Uint8Array): string {
   const h = sha256(publicKeyBytes)
   const ipv6Bytes = Buffer.alloc(16)
@@ -29,7 +28,6 @@ export function deriveCgaIpv6(publicKeyBytes: Uint8Array): string {
   return parts.join(":")
 }
 
-/** @deprecated Yggdrasil address derivation — kept for v1 compat and transport layer. */
 export function deriveYggIpv6(publicKeyBytes: Uint8Array): string {
   const h = sha512(publicKeyBytes)
   const addr = Buffer.alloc(16)
@@ -67,10 +65,6 @@ function base58Encode(buf: Buffer): string {
   return str
 }
 
-/**
- * Derive a W3C did:key from an Ed25519 public key.
- * Format: did:key:z6Mk<base58btc(multicodec_prefix + publicKey)>
- */
 export function deriveDidKey(publicKeyB64: string): string {
   const pubBytes = Buffer.from(publicKeyB64, "base64")
   const prefixed = Buffer.concat([MULTICODEC_ED25519_PREFIX, pubBytes])
@@ -79,13 +73,11 @@ export function deriveDidKey(publicKeyB64: string): string {
 
 // ── Core identity ───────────────────────────────────────────────────────────
 
-/** Compute agentId from a public key (sha256[:16]). */
 export function agentIdFromPublicKey(publicKeyB64: string): string {
   const pubBytes = Buffer.from(publicKeyB64, "base64")
   return Buffer.from(sha256(pubBytes)).toString("hex").slice(0, 16)
 }
 
-/** Generate a new Ed25519 keypair and derive agentId. */
 export function generateIdentity(): Identity {
   const keypair = nacl.sign.keyPair()
   const pubBytes = keypair.publicKey
@@ -101,21 +93,13 @@ export function generateIdentity(): Identity {
     agentId,
     publicKey: pubB64,
     privateKey: privB64,
-    // Legacy fields — populated for v1 backward compat
-    cgaIpv6: deriveCgaIpv6(pubBytes),
-    yggIpv6: deriveYggIpv6(pubBytes),
   }
 }
 
-/**
- * Load identity from file or generate and save a new one.
- * Migrates v1 identity files (adds agentId if missing).
- */
 export function loadOrCreateIdentity(dataDir: string): Identity {
   const idFile = path.join(dataDir, "identity.json")
   if (fs.existsSync(idFile)) {
     const raw = JSON.parse(fs.readFileSync(idFile, "utf-8"))
-    // v1 migration: ensure agentId exists
     if (!raw.agentId && raw.publicKey) {
       raw.agentId = agentIdFromPublicKey(raw.publicKey)
       fs.writeFileSync(idFile, JSON.stringify(raw, null, 2))
@@ -130,7 +114,6 @@ export function loadOrCreateIdentity(dataDir: string): Identity {
 
 // ── Canonical serialization + signing ───────────────────────────────────────
 
-/** Recursively sort all object keys for deterministic JSON serialization. */
 export function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize)
   if (value !== null && typeof value === "object") {
@@ -143,7 +126,6 @@ export function canonicalize(value: unknown): unknown {
   return value
 }
 
-/** Sign a canonical message dict with the private key. Returns base64 signature. */
 export function signMessage(privateKeyB64: string, data: Record<string, unknown>): string {
   const privBytes = Buffer.from(privateKeyB64, "base64")
   const privFull = nacl.sign.keyPair.fromSeed(privBytes)
@@ -152,7 +134,6 @@ export function signMessage(privateKeyB64: string, data: Record<string, unknown>
   return Buffer.from(sig).toString("base64")
 }
 
-/** Verify an Ed25519 signature. Returns true if valid. */
 export function verifySignature(
   publicKeyB64: string,
   data: Record<string, unknown>,
@@ -170,9 +151,6 @@ export function verifySignature(
 
 // ── Utility ─────────────────────────────────────────────────────────────────
 
-/**
- * Get the first non-loopback, non-link-local IPv6 address from network interfaces.
- */
 export function getActualIpv6(): string | null {
   const ifaces = os.networkInterfaces()
   for (const iface of Object.values(ifaces)) {

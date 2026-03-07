@@ -1,25 +1,16 @@
 /**
  * P2P client — sends signed messages to other OpenClaw nodes.
  *
- * v2: Messages use `from` (agentId) as the sender identifier.
- * Delivery strategy:
- *   1. QUIC/UDP transport (if peer has QUIC endpoints and we have the transport)
- *   2. HTTP over Yggdrasil IPv6 (if peer has yggdrasil endpoint or legacy yggAddr)
- *   3. HTTP over any reachable IPv4/IPv6
+ * Delivery strategy by endpoint priority:
+ *   1. QUIC/UDP transport
+ *   2. HTTP over Yggdrasil IPv6
+ *   3. HTTP direct (any reachable address)
  */
 import { P2PMessage, Identity, Endpoint } from "./types"
 import { signMessage } from "./identity"
 import { Transport } from "./transport"
 
-/**
- * Build a signed P2PMessage payload (v2 format).
- * Uses `from` (agentId) as sender. Includes `fromYgg` for backward compat with v1 peers.
- */
-function buildSignedMessage(
-  identity: Identity,
-  event: string,
-  content: string,
-): P2PMessage {
+function buildSignedMessage(identity: Identity, event: string, content: string): P2PMessage {
   const timestamp = Date.now()
   const payload: Omit<P2PMessage, "signature"> = {
     from: identity.agentId,
@@ -27,11 +18,7 @@ function buildSignedMessage(
     event,
     content,
     timestamp,
-    // Include fromYgg for v1 backward compat (v1 servers verify fromYgg === TCP source)
-    fromYgg: identity.yggIpv6,
   }
-  // Sign over the canonical v2 fields (from, publicKey, event, content, timestamp)
-  // plus fromYgg for backward compat with v1 verifiers
   const signature = signMessage(identity.privateKey, payload as Record<string, unknown>)
   return { ...payload, signature }
 }
@@ -46,7 +33,6 @@ async function sendViaHttp(
   const url = isIpv6
     ? `http://[${targetAddr}]:${port}/peer/message`
     : `http://${targetAddr}:${port}/peer/message`
-
   try {
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), timeoutMs)
@@ -82,21 +68,13 @@ async function sendViaTransport(
 }
 
 export interface SendOptions {
-  /** Peer's known transport endpoints (v2 Endpoint[]). */
   endpoints?: Endpoint[]
-  /** Available QUIC transport for UDP delivery. */
   quicTransport?: Transport
 }
 
 /**
- * Build a signed P2PMessage and deliver it to the target peer.
- *
- * @param targetAddr — peer's agentId, yggAddr, or IP address (for HTTP fallback)
- *
- * Delivery strategy:
- *   1. QUIC endpoints (sorted by priority)
- *   2. Yggdrasil endpoints
- *   3. Direct HTTP to targetAddr (legacy fallback)
+ * Send a signed message to a peer. Tries endpoints by priority,
+ * falls back to direct HTTP at targetAddr.
  */
 export async function sendP2PMessage(
   identity: Identity,
@@ -109,48 +87,41 @@ export async function sendP2PMessage(
 ): Promise<{ ok: boolean; error?: string }> {
   const msg = buildSignedMessage(identity, event, content)
 
-  // Try QUIC transport first
   if (opts?.quicTransport?.isActive() && opts?.endpoints?.length) {
-    const quicEndpoint = opts.endpoints
+    const quicEp = opts.endpoints
       .filter((e) => e.transport === "quic")
       .sort((a, b) => a.priority - b.priority)[0]
-    if (quicEndpoint) {
-      const target = quicEndpoint.port
-        ? `${quicEndpoint.address}:${quicEndpoint.port}`
-        : quicEndpoint.address
+    if (quicEp) {
+      const target = quicEp.port ? `${quicEp.address}:${quicEp.port}` : quicEp.address
       const result = await sendViaTransport(msg, target, opts.quicTransport)
       if (result.ok) return result
-      console.warn(`[p2p:client] QUIC send to ${quicEndpoint.address} failed, falling back to HTTP`)
+      console.warn(`[p2p:client] QUIC send to ${quicEp.address} failed, falling back to HTTP`)
     }
   }
 
-  // Try Yggdrasil endpoint from peer record
   if (opts?.endpoints?.length) {
-    const yggEndpoint = opts.endpoints
+    const yggEp = opts.endpoints
       .filter((e) => e.transport === "yggdrasil")
       .sort((a, b) => a.priority - b.priority)[0]
-    if (yggEndpoint) {
-      return sendViaHttp(msg, yggEndpoint.address, yggEndpoint.port || port, timeoutMs)
+    if (yggEp) {
+      return sendViaHttp(msg, yggEp.address, yggEp.port || port, timeoutMs)
     }
   }
 
-  // Legacy fallback: direct HTTP to the provided address
   return sendViaHttp(msg, targetAddr, port, timeoutMs)
 }
 
-/**
- * Broadcast a signed "leave" tombstone to all known peers on graceful shutdown.
- */
 export async function broadcastLeave(
   identity: Identity,
-  peers: Array<{ agentId: string; yggAddr?: string; endpoints?: Endpoint[] }>,
+  peers: Array<{ agentId: string; endpoints?: Endpoint[] }>,
   port: number = 8099,
   opts?: SendOptions,
 ): Promise<void> {
   if (peers.length === 0) return
   await Promise.allSettled(
     peers.map((p) => {
-      const addr = p.yggAddr ?? p.agentId
+      const yggEp = p.endpoints?.find((e) => e.transport === "yggdrasil")
+      const addr = yggEp?.address ?? p.agentId
       return sendP2PMessage(identity, addr, "leave", "", port, 3_000, {
         ...opts,
         endpoints: p.endpoints ?? opts?.endpoints,
@@ -160,17 +131,12 @@ export async function broadcastLeave(
   console.log(`[p2p] Leave broadcast sent to ${peers.length} peer(s)`)
 }
 
-/**
- * Ping a peer — returns true if reachable within timeout.
- * Accepts agentId or yggAddr; prefers endpoint-based routing.
- */
 export async function pingPeer(
   targetAddr: string,
   port: number = 8099,
   timeoutMs: number = 5_000,
   endpoints?: Endpoint[],
 ): Promise<boolean> {
-  // Try Yggdrasil endpoint first
   if (endpoints?.length) {
     const yggEp = endpoints.find((e) => e.transport === "yggdrasil")
     if (yggEp) {

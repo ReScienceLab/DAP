@@ -1,20 +1,17 @@
 /**
  * DHT-style peer discovery via Bootstrap + Gossip exchange.
  *
- * v2: announcements use `from` (agentId) as the primary identifier.
- * Still includes `fromYgg` for backward compat with v1 bootstrap nodes.
- *
  * Flow:
  *   1. On startup, connect to bootstrap nodes (hardcoded + config)
- *   2. POST /peer/announce to each bootstrap → receive their peer list
+ *   2. POST /peer/announce to each bootstrap -> receive their peer list
  *   3. Add discovered peers to local store (keyed by agentId)
  *   4. Fanout: announce to a sample of newly-discovered peers (1 level deep)
  *   5. Periodic loop: re-announce to a random sample to keep the table fresh
  */
 
-import { Identity, PeerAnnouncement, Endpoint } from "./types"
+import { Identity, Endpoint } from "./types"
 import { signMessage, agentIdFromPublicKey } from "./identity"
-import { listPeers, upsertDiscoveredPeer, getPeersForExchange, pruneStale } from "./peer-db"
+import { listPeers, upsertDiscoveredPeer, getPeersForExchange, pruneStale, getEndpointAddress } from "./peer-db"
 
 const BOOTSTRAP_JSON_URL =
   "https://resciencelab.github.io/DeClaw/bootstrap.json"
@@ -50,70 +47,52 @@ const MAX_SHARED_PEERS = 20
 
 let _discoveryTimer: NodeJS.Timeout | null = null
 
-// ── Signed announcement builder (v2) ─────────────────────────────────────────
-
 function buildAnnouncement(
   identity: Identity,
-  meta: { name?: string; version?: string; endpoints?: Endpoint[]; transport?: string } = {}
-): Omit<PeerAnnouncement, "signature"> {
-  const myPeers = getPeersForExchange(MAX_SHARED_PEERS).map((p) => {
-    const entry: {
-      agentId: string
-      publicKey: string
-      alias?: string
-      lastSeen: number
-      endpoints: Endpoint[]
-      yggAddr?: string
-    } = {
-      agentId: p.agentId,
-      publicKey: p.publicKey,
-      lastSeen: p.lastSeen,
-      endpoints: p.endpoints ?? [],
-    }
-    if (p.alias) entry.alias = p.alias
-    if (p.yggAddr) entry.yggAddr = p.yggAddr
-    return entry
-  })
+  meta: { name?: string; version?: string; endpoints?: Endpoint[] } = {}
+): Record<string, unknown> {
+  const myPeers = getPeersForExchange(MAX_SHARED_PEERS).map((p) => ({
+    agentId: p.agentId,
+    publicKey: p.publicKey,
+    alias: p.alias || undefined,
+    lastSeen: p.lastSeen,
+    endpoints: p.endpoints ?? [],
+  }))
 
-  const ann: Omit<PeerAnnouncement, "signature"> = {
+  const ann: Record<string, unknown> = {
     from: identity.agentId,
     publicKey: identity.publicKey,
     timestamp: Date.now(),
     peers: myPeers,
     endpoints: meta.endpoints ?? [],
-    // v1 compat: include fromYgg so v1 bootstrap nodes can verify source
-    fromYgg: identity.yggIpv6,
   }
   if (meta.name) ann.alias = meta.name
   if (meta.version) ann.version = meta.version
   return ann
 }
 
-// ── Core exchange ─────────────────────────────────────────────────────────────
+/** Get a reachable HTTP address from a peer's endpoints or fall back to agentId. */
+function reachableAddr(peer: { agentId: string; endpoints?: Endpoint[] }): string | null {
+  const ygg = peer.endpoints?.find((e) => e.transport === "yggdrasil")
+  return ygg?.address ?? null
+}
 
-/**
- * POST /peer/announce to a single target node.
- * Target is addressed by yggAddr (for v1 bootstrap) or IP.
- * Returns the list of peers they shared back, or null on failure.
- */
 export async function announceToNode(
   identity: Identity,
   targetAddr: string,
   port: number = 8099,
-  meta: { name?: string; version?: string; endpoints?: Endpoint[]; transport?: string } = {}
+  meta: { name?: string; version?: string; endpoints?: Endpoint[] } = {}
 ): Promise<Array<{
   agentId: string
   publicKey: string
   alias?: string
   lastSeen: number
   endpoints?: Endpoint[]
-  yggAddr?: string
 }> | null> {
   const payload = buildAnnouncement(identity, meta)
-  const signature = signMessage(identity.privateKey, payload as Record<string, unknown>)
-  const announcement: PeerAnnouncement = { ...payload, signature }
+  const signature = signMessage(identity.privateKey, payload)
+  const announcement = { ...payload, signature }
 
-  // Target may be IPv6 (needs brackets) or IPv4/hostname
   const isIpv6 = targetAddr.includes(":")
   const url = isIpv6
     ? `http://[${targetAddr}]:${port}/peer/announce`
@@ -138,54 +117,38 @@ export async function announceToNode(
 
     const body = await resp.json() as {
       ok: boolean
-      self?: {
-        agentId?: string
-        yggAddr?: string
-        publicKey?: string
-        alias?: string
-        version?: string
-        endpoints?: Endpoint[]
-      }
+      self?: { agentId?: string; publicKey?: string; alias?: string; version?: string; endpoints?: Endpoint[] }
       peers?: any[]
     }
 
-    // Store the responder's self metadata
-    if (body.self?.publicKey) {
-      const selfId = body.self.agentId ?? (body.self.publicKey ? agentIdFromPublicKey(body.self.publicKey) : body.self.yggAddr)
-      if (selfId) {
-        upsertDiscoveredPeer(selfId, body.self.publicKey, {
-          alias: body.self.alias,
-          version: body.self.version,
-          discoveredVia: selfId,
-          source: "gossip",
-          endpoints: body.self.endpoints,
-          yggAddr: body.self.yggAddr,
-        })
-      }
+    if (body.self?.publicKey && body.self?.agentId) {
+      upsertDiscoveredPeer(body.self.agentId, body.self.publicKey, {
+        alias: body.self.alias,
+        version: body.self.version,
+        discoveredVia: body.self.agentId,
+        source: "gossip",
+        endpoints: body.self.endpoints,
+      })
     }
 
-    // Normalize returned peers to v2 format
     return (body.peers ?? []).map((p: any) => ({
-      agentId: p.agentId ?? (p.publicKey ? agentIdFromPublicKey(p.publicKey) : p.yggAddr),
+      agentId: p.agentId ?? (p.publicKey ? agentIdFromPublicKey(p.publicKey) : null),
       publicKey: p.publicKey,
       alias: p.alias,
       lastSeen: p.lastSeen,
       endpoints: p.endpoints ?? [],
-      yggAddr: p.yggAddr,
-    }))
+    })).filter((p: any) => p.agentId)
   } catch (err: any) {
     console.warn(`[p2p:discovery] Announce to ${targetAddr.slice(0, 20)}... error: ${err?.message}`)
     return null
   }
 }
 
-// ── Bootstrap ─────────────────────────────────────────────────────────────────
-
 export async function bootstrapDiscovery(
   identity: Identity,
   port: number = 8099,
   extraBootstrap: string[] = [],
-  meta: { name?: string; version?: string; endpoints?: Endpoint[]; transport?: string } = {}
+  meta: { name?: string; version?: string; endpoints?: Endpoint[] } = {}
 ): Promise<number> {
   const remotePeers = await fetchRemoteBootstrapPeers()
   const bootstrapAddrs = [
@@ -200,7 +163,7 @@ export async function bootstrapDiscovery(
   console.log(`[p2p:discovery] Bootstrapping via ${bootstrapAddrs.length} node(s) (parallel)...`)
 
   let totalDiscovered = 0
-  const fanoutCandidates: Array<{ addr: string; endpoints?: Endpoint[] }> = []
+  const fanoutCandidates: Array<{ addr: string }> = []
 
   const results = await Promise.allSettled(
     bootstrapAddrs.map(async (addr) => {
@@ -219,27 +182,21 @@ export async function bootstrapDiscovery(
 
     for (const p of peers) {
       if (p.agentId === identity.agentId) continue
-      // Also skip self by yggAddr
-      if (p.yggAddr && p.yggAddr === identity.yggIpv6) continue
       upsertDiscoveredPeer(p.agentId, p.publicKey, {
         alias: p.alias,
         discoveredVia: addr,
         source: "bootstrap",
         lastSeen: p.lastSeen,
         endpoints: p.endpoints,
-        yggAddr: p.yggAddr,
       })
-      // Use yggAddr for fanout HTTP if available, otherwise skip
-      if (p.yggAddr) {
-        fanoutCandidates.push({ addr: p.yggAddr, endpoints: p.endpoints })
-      }
+      const peerAddr = reachableAddr(p)
+      if (peerAddr) fanoutCandidates.push({ addr: peerAddr })
       totalDiscovered++
     }
 
-    console.log(`[p2p:discovery] Bootstrap ${addr.slice(0, 20)}... → +${peers.length} peers`)
+    console.log(`[p2p:discovery] Bootstrap ${addr.slice(0, 20)}... -> +${peers.length} peers`)
   }
 
-  // Fanout: announce to a sample of newly-learned peers
   const fanout = fanoutCandidates.slice(0, MAX_FANOUT_PEERS)
   await Promise.allSettled(
     fanout.map(({ addr }) =>
@@ -247,14 +204,12 @@ export async function bootstrapDiscovery(
         if (!peers) return
         for (const p of peers) {
           if (p.agentId === identity.agentId) continue
-          if (p.yggAddr && p.yggAddr === identity.yggIpv6) continue
           upsertDiscoveredPeer(p.agentId, p.publicKey, {
             alias: p.alias,
             discoveredVia: addr,
             source: "gossip",
             lastSeen: p.lastSeen,
             endpoints: p.endpoints,
-            yggAddr: p.yggAddr,
           })
         }
       })
@@ -265,14 +220,12 @@ export async function bootstrapDiscovery(
   return totalDiscovered
 }
 
-// ── Periodic gossip loop ──────────────────────────────────────────────────────
-
 export function startDiscoveryLoop(
   identity: Identity,
   port: number = 8099,
   intervalMs: number = 10 * 60 * 1000,
   extraBootstrap: string[] = [],
-  meta: { name?: string; version?: string; endpoints?: Endpoint[]; transport?: string } = {}
+  meta: { name?: string; version?: string; endpoints?: Endpoint[] } = {}
 ): void {
   if (_discoveryTimer) return
 
@@ -289,29 +242,24 @@ export function startDiscoveryLoop(
     let updated = 0
     await Promise.allSettled(
       sample.map(async (peer) => {
-        // Use yggAddr for HTTP if available, otherwise we can't reach them yet
-        const addr = peer.yggAddr
+        const addr = getEndpointAddress(peer, "yggdrasil")
         if (!addr) return
         const received = await announceToNode(identity, addr, port, meta)
         if (!received) return
-        // Direct contact succeeded — update
         upsertDiscoveredPeer(peer.agentId, peer.publicKey, {
           alias: peer.alias,
           discoveredVia: peer.agentId,
           source: "gossip",
           endpoints: peer.endpoints,
-          yggAddr: peer.yggAddr,
         })
         for (const p of received) {
           if (p.agentId === identity.agentId) continue
-          if (p.yggAddr && p.yggAddr === identity.yggIpv6) continue
           upsertDiscoveredPeer(p.agentId, p.publicKey, {
             alias: p.alias,
             discoveredVia: peer.agentId,
             source: "gossip",
             lastSeen: p.lastSeen,
             endpoints: p.endpoints,
-            yggAddr: p.yggAddr,
           })
           updated++
         }
