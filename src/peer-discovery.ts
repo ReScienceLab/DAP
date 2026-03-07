@@ -12,7 +12,7 @@
  * with anyone who announces to it, so the network self-heals over time.
  */
 
-import { Identity, PeerAnnouncement } from "./types";
+import { Identity, PeerAnnouncement, PeerEndpoint } from "./types";
 import { signMessage } from "./identity";
 import { listPeers, upsertDiscoveredPeer, getPeersForExchange, pruneStale } from "./peer-db";
 
@@ -59,15 +59,16 @@ let _discoveryTimer: NodeJS.Timeout | null = null;
 
 function buildAnnouncement(
   identity: Identity,
-  meta: { name?: string; version?: string } = {}
+  meta: { name?: string; version?: string; endpoints?: PeerEndpoint[]; transport?: string } = {}
 ): Omit<PeerAnnouncement, "signature"> {
   const myPeers = getPeersForExchange(MAX_SHARED_PEERS).map((p) => {
-    const entry: { yggAddr: string; publicKey: string; alias?: string; lastSeen: number } = {
+    const entry: { yggAddr: string; publicKey: string; alias?: string; lastSeen: number; endpoints?: PeerEndpoint[] } = {
       yggAddr: p.yggAddr,
       publicKey: p.publicKey,
       lastSeen: p.lastSeen,
     };
     if (p.alias) entry.alias = p.alias;
+    if (p.endpoints?.length) entry.endpoints = p.endpoints;
     return entry;
   });
 
@@ -79,6 +80,8 @@ function buildAnnouncement(
   };
   if (meta.name) ann.alias = meta.name;
   if (meta.version) ann.version = meta.version;
+  if (meta.transport) ann.transport = meta.transport as any;
+  if (meta.endpoints?.length) ann.endpoints = meta.endpoints;
   return ann;
 }
 
@@ -92,8 +95,8 @@ export async function announceToNode(
   identity: Identity,
   targetYggAddr: string,
   port: number = 8099,
-  meta: { name?: string; version?: string } = {}
-): Promise<Array<{ yggAddr: string; publicKey: string; alias?: string; lastSeen: number }> | null> {
+  meta: { name?: string; version?: string; endpoints?: PeerEndpoint[]; transport?: string } = {}
+): Promise<Array<{ yggAddr: string; publicKey: string; alias?: string; lastSeen: number; endpoints?: PeerEndpoint[] }> | null> {
   const payload = buildAnnouncement(identity, meta);
   const signature = signMessage(identity.privateKey, payload as Record<string, unknown>);
   const announcement: PeerAnnouncement = { ...payload, signature };
@@ -146,7 +149,7 @@ export async function bootstrapDiscovery(
   identity: Identity,
   port: number = 8099,
   extraBootstrap: string[] = [],
-  meta: { name?: string; version?: string } = {}
+  meta: { name?: string; version?: string; endpoints?: PeerEndpoint[]; transport?: string } = {}
 ): Promise<number> {
   const remotePeers = await fetchRemoteBootstrapPeers();
   const bootstrapAddrs = [
@@ -227,7 +230,7 @@ export function startDiscoveryLoop(
   port: number = 8099,
   intervalMs: number = 10 * 60 * 1000,  // default: every 10 minutes
   extraBootstrap: string[] = [],
-  meta: { name?: string; version?: string } = {}
+  meta: { name?: string; version?: string; endpoints?: PeerEndpoint[]; transport?: string } = {}
 ): void {
   if (_discoveryTimer) return;
 
