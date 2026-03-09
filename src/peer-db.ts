@@ -248,28 +248,3 @@ export function getEndpointAddress(peer: DiscoveredPeerRecord, transport: string
     .sort((a, b) => a.priority - b.priority)[0]
   return ep?.address ?? null
 }
-
-/**
- * Replace the public key for an existing peer (key rotation).
- * If the peer is not yet in the store, creates a minimal gossip record.
- */
-export function tofuReplaceKey(agentId: string, newPublicKey: string): void {
-  const now = Date.now()
-  const existing = store.peers[agentId]
-  if (existing) {
-    existing.publicKey = newPublicKey
-    existing.lastSeen = now
-  } else {
-    store.peers[agentId] = {
-      agentId,
-      publicKey: newPublicKey,
-      alias: "",
-      endpoints: [],
-      capabilities: [],
-      firstSeen: now,
-      lastSeen: now,
-      source: "gossip",
-    }
-  }
-  saveImmediate()
-}
