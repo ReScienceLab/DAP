@@ -153,7 +153,7 @@ export async function bootstrapDiscovery(
   const remotePeers = await fetchRemoteBootstrapPeers()
   const bootstrapAddrs = [
     ...new Set([...remotePeers, ...DEFAULT_BOOTSTRAP_PEERS, ...extraBootstrap]),
-  ].filter((a) => a && a !== identity.yggIpv6)
+  ].filter((a) => a && a !== identity.yggIpv6 && a !== identity.agentId)
 
   if (bootstrapAddrs.length === 0) {
     console.log("[p2p:discovery] No bootstrap nodes configured — skipping initial discovery.")
