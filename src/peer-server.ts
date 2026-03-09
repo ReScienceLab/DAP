@@ -73,6 +73,10 @@ export async function startPeerServer(
       return reply.code(400).send({ error: "Missing 'from' (agentId)" })
     }
 
+    if (agentIdFromPublicKey(ann.publicKey) !== agentId) {
+      return reply.code(400).send({ error: "agentId does not match publicKey" })
+    }
+
     const endpoints: Endpoint[] = ann.endpoints ?? []
 
     upsertDiscoveredPeer(agentId, ann.publicKey, {
@@ -113,6 +117,10 @@ export async function startPeerServer(
     const agentId: string = raw.from
     if (!agentId) {
       return reply.code(400).send({ error: "Missing 'from' (agentId)" })
+    }
+
+    if (agentIdFromPublicKey(raw.publicKey) !== agentId) {
+      return reply.code(400).send({ error: "agentId does not match publicKey" })
     }
 
     if (!tofuVerifyAndCache(agentId, raw.publicKey)) {
