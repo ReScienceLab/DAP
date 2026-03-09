@@ -2,4 +2,10 @@
 "@resciencelab/declaw": minor
 ---
 
-Add QUIC transport backend as zero-install fallback when Yggdrasil is unavailable. Introduces Transport abstraction interface, TransportManager for automatic selection, YggdrasilTransport and QUICTransport implementations with STUN-assisted NAT traversal, and multi-transport endpoint support in peer discovery.
+BREAKING CHANGE: Peer identity migrated from Yggdrasil IPv6 address (`yggAddr`) to `agentId` (`sha256(publicKey)[:32]`). All v1 protocol compatibility removed — existing peer databases will not migrate.
+
+- Transport abstraction layer with TransportManager for automatic selection
+- YggdrasilTransport wrapper and UDPTransport (plain UDP with STUN NAT traversal)
+- Multi-transport endpoint support in peer discovery and messaging
+- `agentId` as primary peer identity with `did:key` derivation for W3C compatibility
+- Application-layer Ed25519 signatures + TOFU binding as transport-agnostic trust anchor
