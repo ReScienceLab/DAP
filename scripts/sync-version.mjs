@@ -9,7 +9,7 @@ plugin.version = version
 writeFileSync('openclaw.plugin.json', JSON.stringify(plugin, null, 2) + '\n')
 
 let skill = readFileSync('skills/declaw/SKILL.md', 'utf8')
-skill = skill.replace(/^version: .*/m, `version: ${version}`)
+skill = skill.replace(/^version: .*/m, `version: "${version}"`)
 writeFileSync('skills/declaw/SKILL.md', skill)
 
 console.log(`Synced version ${version} → openclaw.plugin.json, skills/declaw/SKILL.md`)

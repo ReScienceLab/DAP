@@ -47,5 +47,6 @@ jobs:
         env:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
         run: |
+          VERSION=$(node -p "require('./package.json').version")
           npx clawhub@latest auth login --token "$CLAWHUB_TOKEN" --no-browser
-          npx clawhub@latest publish "$(pwd)/skills/declaw"
+          npx clawhub@latest publish "$(pwd)/skills/declaw" --version "$VERSION"
