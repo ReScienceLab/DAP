@@ -14,7 +14,7 @@ import { signMessage, agentIdFromPublicKey } from "./identity"
 import { listPeers, upsertDiscoveredPeer, getPeersForExchange, pruneStale } from "./peer-db"
 
 const BOOTSTRAP_JSON_URL =
-  "https://resciencelab.github.io/DeClaw/bootstrap.json"
+  "https://resciencelab.github.io/DAP/bootstrap.json"
 
 export async function fetchRemoteBootstrapPeers(): Promise<string[]> {
   try {

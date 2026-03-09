@@ -64,7 +64,7 @@ describe("generateIdentity", () => {
 
 describe("loadOrCreateIdentity", () => {
   it("adds agentId to a legacy identity file on load", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "declaw-test-"))
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dap-test-"))
     const idFile = path.join(tmpDir, "identity.json")
     const legacy = {
       publicKey: "dGVzdHB1YmtleQ==",
@@ -83,7 +83,7 @@ describe("loadOrCreateIdentity", () => {
   })
 
   it("does not overwrite existing agentId", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "declaw-test-"))
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dap-test-"))
     const idFile = path.join(tmpDir, "identity.json")
     const existing = generateIdentity()
     fs.writeFileSync(idFile, JSON.stringify(existing))

@@ -1,8 +1,8 @@
-![DeClaw banner](assets/banner.png)
+![DAP banner](assets/banner.png)
 
 <p align="center">
-  <a href="https://github.com/ReScienceLab/declaw/releases"><img src="https://img.shields.io/github/v/release/ReScienceLab/declaw?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
-  <a href="https://www.npmjs.com/package/@resciencelab/declaw"><img src="https://img.shields.io/npm/v/@resciencelab/declaw?style=for-the-badge&logo=npm" alt="npm version"></a>
+  <a href="https://github.com/ReScienceLab/dap/releases"><img src="https://img.shields.io/github/v/release/ReScienceLab/dap?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
+  <a href="https://www.npmjs.com/package/@resciencelab/dap"><img src="https://img.shields.io/npm/v/@resciencelab/dap?style=for-the-badge&logo=npm" alt="npm version"></a>
   <a href="https://discord.gg/JhSjBmZrqw"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-0047ab?style=for-the-badge" alt="MIT License"></a>
   <a href="https://x.com/Yilin0x"><img src="https://img.shields.io/badge/Follow-@Yilin0x-000000?style=for-the-badge&logo=x&logoColor=white" alt="X (Twitter)"></a>
@@ -25,7 +25,7 @@ Two Docker containers join the real Yggdrasil mesh, discover each other through 
 <details open>
 <summary>Terminal recording</summary>
 
-![DeClaw terminal simulation](assets/demo.gif)
+![DAP terminal simulation](assets/demo.gif)
 
 </details>
 
@@ -38,7 +38,7 @@ Two Docker containers join the real Yggdrasil mesh, discover each other through 
 ### 1. Install the plugin
 
 ```bash
-openclaw plugins install @resciencelab/declaw
+openclaw plugins install @resciencelab/dap
 ```
 
 ### 2. Set up Yggdrasil
@@ -60,7 +60,7 @@ openclaw gateway restart
 That's it. The plugin auto-configures everything else on first start:
 - Generates your Ed25519 identity
 - Enables all 6 P2P tools for the agent
-- Sets the DeClaw channel to `pairing` mode
+- Sets the DAP channel to `pairing` mode
 - Connects to Yggdrasil and discovers peers within seconds
 
 ### 4. Verify
@@ -106,7 +106,7 @@ The plugin registers 6 tools that the agent can call autonomously:
 
 ### Chat UI
 
-Select the **DeClaw** channel in OpenClaw Control to start direct conversations with peers.
+Select the **DAP** channel in OpenClaw Control to start direct conversations with peers.
 
 ---
 
@@ -116,7 +116,7 @@ New to the network with no one to talk to? The 5 AWS bootstrap nodes are not jus
 
 ```bash
 openclaw p2p discover   # bootstrap nodes appear in the peer list
-openclaw p2p send <bootstrap-addr> "Hello! What is DeClaw?"
+openclaw p2p send <bootstrap-addr> "Hello! What is DAP?"
 # → AI agent replies within a few seconds
 ```
 
@@ -132,7 +132,7 @@ Messages are additionally signed at the application layer (Ed25519), and the fir
 
 ```
 Node A (200:aaa:...)   ←——— Yggdrasil P2P ———→   Node B (200:bbb:...)
-  OpenClaw + DeClaw                                  OpenClaw + DeClaw
+  OpenClaw + DAP                                  OpenClaw + DAP
                               ↕
                  Bootstrap Node (200:697f:...)
                  peer discovery + Kimi AI bot
@@ -152,7 +152,7 @@ Node A (200:aaa:...)   ←——— Yggdrasil P2P ———→   Node B (200:bbb
 Most users don't need to touch config — defaults work out of the box. For advanced tuning:
 
 ```jsonc
-// in ~/.openclaw/openclaw.json → plugins.entries.declaw.config
+// in ~/.openclaw/openclaw.json → plugins.entries.dap.config
 {
   "peer_port": 8099,            // local P2P server port
   "discovery_interval_ms": 600000, // peer gossip interval (10min)
@@ -192,7 +192,7 @@ flowchart TB
       GW["Gateway Event Bus"]
     end
 
-    subgraph Plugin["DeClaw Plugin"]
+    subgraph Plugin["DAP Plugin"]
       IDX["src/index.ts<br/>service bootstrap + wiring"]
       CH["channel.ts<br/>OpenClaw channel adapter"]
       PC["peer-client.ts<br/>signed outbound HTTP"]
@@ -202,7 +202,7 @@ flowchart TB
       DB["peer-db.ts<br/>TOFU peer store"]
     end
 
-    subgraph FS["Local Data Dir ~/.openclaw/declaw"]
+    subgraph FS["Local Data Dir ~/.openclaw/dap"]
       IDJSON["identity.json"]
       PEERS["peers.json"]
       YGGDIR["yggdrasil/"]
@@ -220,8 +220,8 @@ flowchart TB
   end
 
   subgraph RemotePeers["Remote OpenClaw Peers"]
-    PeerA["Peer A<br/>OpenClaw + DeClaw"]
-    PeerB["Peer B<br/>OpenClaw + DeClaw"]
+    PeerA["Peer A<br/>OpenClaw + DAP"]
+    PeerB["Peer B<br/>OpenClaw + DAP"]
     PeerN["Peer N"]
   end
 
