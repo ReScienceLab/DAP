@@ -53,7 +53,7 @@ openclaw install @resciencelab/dap
       .then(data => {
         const tbody = document.getElementById('nodes');
         tbody.innerHTML = data.bootstrap_nodes.map(n =>
-          `<tr><td><span class="status"></span>${n.yggAddr}</td><td>${n.port}</td><td>${n.region} (${n.provider})</td></tr>`
+          `<tr><td><span class="status"></span>${n.yggAddr}</td><td>${n.httpPort ?? n.port}</td><td>${n.region} (${n.provider})</td></tr>`
         ).join('');
       })
       .catch(() => {

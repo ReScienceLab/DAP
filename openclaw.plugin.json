@@ -69,6 +69,11 @@
         "type": "integer",
         "default": 30000,
         "description": "Delay before first bootstrap attempt to allow Yggdrasil routes to converge (ms, default 30s)"
+      },
+      "tofu_ttl_days": {
+        "type": "integer",
+        "default": 7,
+        "description": "Days before a TOFU public-key binding expires and is re-verified on next contact (default 7)"
       }
     }
   },
@@ -102,6 +107,9 @@
     },
     "startup_delay_ms": {
       "label": "Bootstrap Startup Delay (ms)"
+    },
+    "tofu_ttl_days": {
+      "label": "TOFU Key Binding TTL (days)"
     }
   }
 }

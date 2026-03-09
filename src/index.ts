@@ -9,7 +9,7 @@ import * as path from "path"
 import { execSync } from "child_process"
 import { loadOrCreateIdentity, getActualIpv6, deriveDidKey } from "./identity"
 import { startYggdrasil, stopYggdrasil, isYggdrasilAvailable, detectExternalYggdrasil, getYggdrasilNetworkInfo } from "./yggdrasil"
-import { initDb, listPeers, upsertPeer, removePeer, getPeer, flushDb, getPeerIds, getEndpointAddress } from "./peer-db"
+import { initDb, listPeers, upsertPeer, removePeer, getPeer, flushDb, getPeerIds, getEndpointAddress, setTofuTtl } from "./peer-db"
 import { startPeerServer, stopPeerServer, getInbox, setSelfMeta, handleUdpMessage } from "./peer-server"
 import { sendP2PMessage, pingPeer, broadcastLeave, SendOptions } from "./peer-client"
 import { bootstrapDiscovery, startDiscoveryLoop, stopDiscoveryLoop, DEFAULT_BOOTSTRAP_PEERS } from "./peer-discovery"
@@ -131,6 +131,7 @@ export default function register(api: any) {
       const isFirstRun = !require("fs").existsSync(path.join(dataDir, "identity.json"))
       identity = loadOrCreateIdentity(dataDir)
       initDb(dataDir)
+      if (cfg.tofu_ttl_days !== undefined) setTofuTtl(cfg.tofu_ttl_days)
 
       console.log(`[p2p] Agent ID:  ${identity.agentId}`)
       if (_agentMeta.name) {

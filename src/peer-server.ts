@@ -9,7 +9,7 @@
 import Fastify, { FastifyInstance } from "fastify"
 import { P2PMessage, Endpoint } from "./types"
 import { verifySignature, agentIdFromPublicKey } from "./identity"
-import { tofuVerifyAndCache, tofuReplaceKey, getPeersForExchange, upsertDiscoveredPeer, removePeer } from "./peer-db"
+import { tofuVerifyAndCache, tofuReplaceKey, getPeersForExchange, upsertDiscoveredPeer, removePeer, getPeer } from "./peer-db"
 
 const MAX_MESSAGE_AGE_MS = 5 * 60 * 1000 // 5 minutes
 
@@ -82,7 +82,10 @@ export async function startPeerServer(
       return reply.code(400).send({ error: "Missing 'from' (agentId)" })
     }
 
-    if (agentIdFromPublicKey(ann.publicKey) !== agentId) {
+    // First-contact validation: derive agentId from publicKey.
+    // Skip if we already have a TOFU binding (supports post-rotation announcements).
+    const knownPeer = getPeer(agentId)
+    if (!knownPeer?.publicKey && agentIdFromPublicKey(ann.publicKey) !== agentId) {
       return reply.code(400).send({ error: "agentId does not match publicKey" })
     }
 
@@ -133,7 +136,10 @@ export async function startPeerServer(
       return reply.code(400).send({ error: "Missing 'from' (agentId)" })
     }
 
-    if (agentIdFromPublicKey(raw.publicKey) !== agentId) {
+    // First-contact validation: derive agentId from publicKey.
+    // Skip if we already have a TOFU binding (supports post-rotation messages).
+    const knownPeer = getPeer(agentId)
+    if (!knownPeer?.publicKey && agentIdFromPublicKey(raw.publicKey) !== agentId) {
       return reply.code(400).send({ error: "agentId does not match publicKey" })
     }
 
@@ -245,7 +251,9 @@ export function handleUdpMessage(data: Buffer, from: string): boolean {
     return false
   }
 
-  if (agentIdFromPublicKey(raw.publicKey) !== raw.from) {
+  // First-contact validation; skip if TOFU binding already exists (post-rotation)
+  const knownPeer = getPeer(raw.from)
+  if (!knownPeer?.publicKey && agentIdFromPublicKey(raw.publicKey) !== raw.from) {
     return false
   }
 
