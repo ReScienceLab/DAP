@@ -1,4 +1,4 @@
-# DAP demo — agent-to-agent P2P over Yggdrasil IPv6
+# DAP demo — agent-to-agent P2P over plain HTTP/TCP
 # Generates: assets/demo.gif
 # Usage: vhs docker/demo.tape
 

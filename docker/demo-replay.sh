@@ -11,7 +11,7 @@ hr() { p "${D}──────────────────────
 
 clear
 p ""
-p "  ${W}DAP${R}  Agent-to-Agent P2P over Yggdrasil IPv6 Mesh"
+p "  ${W}DAP${R}  Agent-to-Agent P2P over plain HTTP/TCP"
 p "  ${D}Two Docker containers · AWS bootstrap nodes · gpt-4o agents${R}"
 p ""
 hr
@@ -20,20 +20,16 @@ s 0.6
 p ""
 p "  ${D}[build]${R} Pulling from cache..."
 s 0.5
-p "  ${G}✓${R} dap-sim-alice   image ready"
+p "  ${G}✓${R} dap-node-alice   image ready"
 s 0.2
-p "  ${G}✓${R} dap-sim-bob     image ready"
+p "  ${G}✓${R} dap-node-bob     image ready"
 s 0.4
 
 p ""
-p "  ${Y}[alice]${R} Starting Yggdrasil daemon..."
-s 0.9
-p "  ${Y}[alice]${R} Yggdrasil address  ${C}202:c9e3:4d1b:a7f2:b831:9e20:6a14:3fd7${R}"
+p "  ${Y}[alice]${R} Identity: ${C}a1b2c3d4${R}...  agentId derived from Ed25519 key"
 p "  ${Y}[alice]${R} Peer server listening on ${W}[::]:8099${R}"
 s 0.4
-p "  ${B}[bob]${R}   Starting Yggdrasil daemon..."
-s 0.9
-p "  ${B}[bob]${R}   Yggdrasil address  ${C}203:7b14:2e9c:f481:a023:5d6e:8b7c:1fa2${R}"
+p "  ${B}[bob]${R}   Identity: ${C}e5f6a7b8${R}...  agentId derived from Ed25519 key"
 p "  ${B}[bob]${R}   Peer server listening on ${W}[::]:8099${R}"
 s 0.5
 
@@ -49,12 +45,12 @@ hr
 p ""
 p "  ${D}Round 1${R}"
 p "  ${B}[bob → alice]${R}  \"Hey Alice! Isn't it fascinating how DAP lets us"
-p "               communicate securely over Yggdrasil's IPv6 mesh?\""
+p "               communicate securely over plain TCP with Ed25519 signing?\""
 s 0.5
-p "  ${Y}[alice]${R} ${D}Ed25519 ✓  Yggdrasil IP ✓  testMode: false${R}"
+p "  ${Y}[alice]${R} ${D}Ed25519 ✓  TOFU ✓${R}"
 s 1.0
 p "  ${Y}[alice → bob]${R}  \"Absolutely Bob! DAP's decentralized architecture with"
-p "               Yggdrasil creates seamless, private P2P communication.\""
+p "               agentId-based identity creates seamless, private P2P communication.\""
 s 0.7
 
 p ""
@@ -83,6 +79,6 @@ p "  ${G}${W} PASS${R}  alice · 3 rounds · all Ed25519 signatures verified"
 p "  ${G}${W} PASS${R}  bob   · 3 rounds · all messages delivered & verified"
 hr
 p ""
-p "  ${D}real Yggdrasil mesh · Ed25519 signed · gpt-4o powered · ~62 seconds${R}"
+p "  ${D}plain HTTP/TCP · Ed25519 signed · gpt-4o powered · ~62 seconds${R}"
 p ""
 s 3
