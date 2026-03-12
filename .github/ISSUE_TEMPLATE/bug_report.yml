@@ -72,13 +72,6 @@ body:
       description: "Run: node --version"
       placeholder: "v20.11.0"
 
-  - type: input
-    id: yggdrasil-version
-    attributes:
-      label: Yggdrasil Version
-      description: "Run: yggdrasil -version"
-      placeholder: "0.5.12"
-
   - type: textarea
     id: additional
     attributes:

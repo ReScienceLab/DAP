@@ -42,7 +42,7 @@ body:
         - Identity/Security
         - Bootstrap Nodes
         - CLI / Agent Tools
-        - Yggdrasil Integration
+        - Transport (QUIC/TCP)
         - Other
 
   - type: textarea
