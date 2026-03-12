@@ -6,39 +6,10 @@
  */
 import * as nacl from "tweetnacl"
 import { sha256 } from "@noble/hashes/sha256"
-import { sha512 } from "@noble/hashes/sha512"
 import * as fs from "fs"
 import * as path from "path"
 import * as os from "os"
 import { Identity } from "./types"
-
-// ── Address derivation (used by Yggdrasil transport) ────────────────────────
-
-const ULA_PREFIX = Buffer.from("fd00deadbeef0000", "hex")
-
-export function deriveCgaIpv6(publicKeyBytes: Uint8Array): string {
-  const h = sha256(publicKeyBytes)
-  const ipv6Bytes = Buffer.alloc(16)
-  ULA_PREFIX.copy(ipv6Bytes, 0, 0, 8)
-  Buffer.from(h).copy(ipv6Bytes, 8, 24, 32)
-  const parts: string[] = []
-  for (let i = 0; i < 16; i += 2) {
-    parts.push(ipv6Bytes.readUInt16BE(i).toString(16).padStart(4, "0"))
-  }
-  return parts.join(":")
-}
-
-export function deriveYggIpv6(publicKeyBytes: Uint8Array): string {
-  const h = sha512(publicKeyBytes)
-  const addr = Buffer.alloc(16)
-  addr[0] = 0x02
-  Buffer.from(h).copy(addr, 1, 0, 15)
-  const parts: string[] = []
-  for (let i = 0; i < 16; i += 2) {
-    parts.push(addr.readUInt16BE(i).toString(16).padStart(4, "0"))
-  }
-  return parts.join(":")
-}
 
 // ── did:key mapping ─────────────────────────────────────────────────────────
 
@@ -104,7 +75,9 @@ export function loadOrCreateIdentity(dataDir: string): Identity {
       raw.agentId = agentIdFromPublicKey(raw.publicKey)
       fs.writeFileSync(idFile, JSON.stringify(raw, null, 2))
     }
-    return raw as Identity
+    // Strip legacy Yggdrasil fields if present
+    const { cgaIpv6: _cga, yggIpv6: _ygg, ...clean } = raw
+    return clean as Identity
   }
   fs.mkdirSync(dataDir, { recursive: true })
   const id = generateIdentity()
@@ -153,8 +126,6 @@ export function verifySignature(
 
 /**
  * Returns true if addr is a globally-routable unicast IPv6 address (2000::/3).
- * Excludes: link-local (fe80::/10), ULA (fc00::/7), loopback (::1),
- * and Yggdrasil overlay (200::/7 — first group 0x0200–0x03ff).
  */
 export function isGlobalUnicastIPv6(addr: string): boolean {
   if (!addr || !addr.includes(":")) return false
@@ -162,14 +133,12 @@ export function isGlobalUnicastIPv6(addr: string): boolean {
   if (clean === "::1") return false
   if (clean.startsWith("fe80:")) return false
   if (clean.startsWith("fc") || clean.startsWith("fd")) return false
-  // Global unicast 2000::/3: first 16-bit group is 0x2000–0x3fff
   const first = parseInt(clean.split(":")[0].padStart(4, "0"), 16)
   return first >= 0x2000 && first <= 0x3fff
 }
 
 /**
- * Returns the first globally-routable public IPv6 address found on any interface.
- * Returns null if none found (NAT/IPv4-only or ULA-only environment).
+ * Returns the first globally-routable public IPv6 address on any interface.
  */
 export function getPublicIPv6(): string | null {
   const ifaces = os.networkInterfaces()
@@ -184,6 +153,9 @@ export function getPublicIPv6(): string | null {
   return null
 }
 
+/**
+ * Returns the first non-loopback, non-link-local IPv6 address on any interface.
+ */
 export function getActualIpv6(): string | null {
   const ifaces = os.networkInterfaces()
   for (const iface of Object.values(ifaces)) {

@@ -1,7 +1,7 @@
 {
   "name": "@resciencelab/dap",
   "version": "0.3.2",
-  "description": "Direct P2P communication between OpenClaw instances over Yggdrasil IPv6",
+  "description": "Direct encrypted P2P communication between OpenClaw instances",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -18,14 +18,12 @@
     "channel": {
       "id": "dap",
       "label": "DAP",
-      "selectionLabel": "DAP (Yggdrasil P2P)",
+      "selectionLabel": "DAP (P2P)",
       "docsPath": "/channels/dap",
-      "blurb": "Direct encrypted P2P messaging via Yggdrasil IPv6. No servers, no middlemen.",
+      "blurb": "Direct encrypted P2P messaging. No servers, no middlemen.",
       "order": 90,
       "aliases": [
-        "p2p",
-        "ygg",
-        "yggdrasil"
+        "p2p"
       ]
     },
     "install": {
@@ -46,10 +44,9 @@
   "keywords": [
     "openclaw",
     "plugin",
-    "ipv6",
     "p2p",
-    "yggdrasil",
-    "ed25519"
+    "ed25519",
+    "agent-network"
   ],
   "license": "MIT",
   "dependencies": {

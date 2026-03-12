@@ -1,7 +1,7 @@
 {
   "id": "dap",
   "name": "DAP",
-  "description": "Direct encrypted P2P communication between OpenClaw instances via Yggdrasil IPv6",
+  "description": "Direct encrypted P2P communication between OpenClaw instances",
   "version": "0.3.2",
   "channels": [
     "dap"
@@ -25,40 +25,18 @@
       "quic_port": {
         "type": "integer",
         "default": 8098,
-        "description": "Local port for the QUIC/UDP transport (fallback when Yggdrasil is unavailable)"
+        "description": "Local port for the QUIC/UDP transport (optional fast transport)"
       },
       "data_dir": {
         "type": "string",
         "description": "Directory to store identity and peer data (default: ~/.openclaw/dap)"
-      },
-      "yggdrasil_peers": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        },
-        "description": "Additional Yggdrasil bootstrap peers"
-      },
-      "test_mode": {
-        "oneOf": [
-          {
-            "type": "boolean"
-          },
-          {
-            "type": "string",
-            "enum": [
-              "auto"
-            ]
-          }
-        ],
-        "default": "auto",
-        "description": "\"auto\" (default): use Yggdrasil if available, otherwise local-only. true: force local-only. false: require Yggdrasil."
       },
       "bootstrap_peers": {
         "type": "array",
         "items": {
           "type": "string"
         },
-        "description": "Bootstrap node Yggdrasil addresses for DHT peer discovery"
+        "description": "Additional bootstrap node addresses (hostname or IP) for DHT peer discovery"
       },
       "discovery_interval_ms": {
         "type": "integer",
@@ -67,8 +45,8 @@
       },
       "startup_delay_ms": {
         "type": "integer",
-        "default": 30000,
-        "description": "Delay before first bootstrap attempt to allow Yggdrasil routes to converge (ms, default 30s)"
+        "default": 5000,
+        "description": "Delay before first bootstrap attempt (ms, default 5s)"
       },
       "tofu_ttl_days": {
         "type": "integer",
@@ -92,12 +70,6 @@
     },
     "data_dir": {
       "label": "Data Directory"
-    },
-    "yggdrasil_peers": {
-      "label": "Extra Yggdrasil Peers"
-    },
-    "test_mode": {
-      "label": "Test Mode (no Yggdrasil)"
     },
     "bootstrap_peers": {
       "label": "Bootstrap Peers"

@@ -1,10 +1,9 @@
 /**
- * P2P client — sends signed messages to other OpenClaw nodes.
+ * P2P client — sends signed messages to other DAP nodes.
  *
  * Delivery strategy by endpoint priority:
- *   1. QUIC/UDP transport
- *   2. HTTP over Yggdrasil IPv6
- *   3. HTTP direct (any reachable address)
+ *   1. QUIC/UDP transport (if available)
+ *   2. HTTP over TCP (direct fallback)
  */
 import { P2PMessage, Identity, Endpoint } from "./types"
 import { signMessage } from "./identity"
@@ -29,7 +28,7 @@ async function sendViaHttp(
   port: number,
   timeoutMs: number,
 ): Promise<{ ok: boolean; error?: string }> {
-  const isIpv6 = targetAddr.includes(":")
+  const isIpv6 = targetAddr.includes(":") && !targetAddr.includes(".")
   const url = isIpv6
     ? `http://[${targetAddr}]:${port}/peer/message`
     : `http://${targetAddr}:${port}/peer/message`
@@ -73,8 +72,8 @@ export interface SendOptions {
 }
 
 /**
- * Send a signed message to a peer. Tries endpoints by priority,
- * falls back to direct HTTP at targetAddr.
+ * Send a signed message to a peer. Tries QUIC first if available,
+ * then falls back to HTTP.
  */
 export async function sendP2PMessage(
   identity: Identity,
@@ -99,12 +98,13 @@ export async function sendP2PMessage(
     }
   }
 
+  // Pick the best HTTP endpoint from peer's endpoint list, or fall back to targetAddr
   if (opts?.endpoints?.length) {
-    const yggEp = opts.endpoints
-      .filter((e) => e.transport === "yggdrasil")
+    const httpEp = opts.endpoints
+      .filter((e) => e.transport === "tcp")
       .sort((a, b) => a.priority - b.priority)[0]
-    if (yggEp) {
-      return sendViaHttp(msg, yggEp.address, yggEp.port || port, timeoutMs)
+    if (httpEp) {
+      return sendViaHttp(msg, httpEp.address, httpEp.port || port, timeoutMs)
     }
   }
 
@@ -121,8 +121,8 @@ export async function broadcastLeave(
   const reachable = peers.filter((p) => p.endpoints && p.endpoints.length > 0)
   await Promise.allSettled(
     reachable.map((p) => {
-      const yggEp = p.endpoints!.find((e) => e.transport === "yggdrasil")
-      const addr = yggEp?.address ?? p.endpoints![0].address
+      const ep = p.endpoints!.sort((a, b) => a.priority - b.priority)[0]
+      const addr = ep?.address ?? p.endpoints![0].address
       return sendP2PMessage(identity, addr, "leave", "", port, 3_000, {
         ...opts,
         endpoints: p.endpoints ?? opts?.endpoints,
@@ -139,13 +139,13 @@ export async function pingPeer(
   endpoints?: Endpoint[],
 ): Promise<boolean> {
   if (endpoints?.length) {
-    const yggEp = endpoints.find((e) => e.transport === "yggdrasil")
-    if (yggEp) {
-      targetAddr = yggEp.address
-      port = yggEp.port || port
+    const ep = endpoints.sort((a, b) => a.priority - b.priority)[0]
+    if (ep) {
+      targetAddr = ep.address
+      port = ep.port || port
     }
   }
-  const isIpv6 = targetAddr.includes(":")
+  const isIpv6 = targetAddr.includes(":") && !targetAddr.includes(".")
   const url = isIpv6
     ? `http://[${targetAddr}]:${port}/peer/ping`
     : `http://${targetAddr}:${port}/peer/ping`

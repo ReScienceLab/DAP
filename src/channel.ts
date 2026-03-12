@@ -5,7 +5,6 @@
 import { Identity } from "./types"
 import { sendP2PMessage, SendOptions } from "./peer-client"
 import { listPeers, getPeerIds, getPeer } from "./peer-db"
-import { getEndpointAddress } from "./peer-db"
 import { onMessage } from "./peer-server"
 
 export const CHANNEL_CONFIG_SCHEMA = {
@@ -47,7 +46,7 @@ export function buildChannel(identity: Identity, port: number, getSendOpts?: (id
       selectionLabel: "DAP (P2P)",
       docsPath: "/channels/dap",
       blurb: "Direct encrypted P2P messaging. No servers, no middlemen.",
-      aliases: ["p2p", "ygg", "yggdrasil"],
+      aliases: ["p2p"],
     },
     capabilities: { chatTypes: ["direct"] },
     configSchema: CHANNEL_CONFIG_SCHEMA,
@@ -67,10 +66,8 @@ export function buildChannel(identity: Identity, port: number, getSendOpts?: (id
       deliveryMode: "direct" as const,
       sendText: async ({ text, account }: { text: string; account: { agentId?: string } }) => {
         const agentId = account.agentId ?? ""
-        const peer = getPeer(agentId)
-        const targetAddr = (peer ? getEndpointAddress(peer, "yggdrasil") : null) ?? agentId
         const opts = getSendOpts?.(agentId)
-        const result = await sendP2PMessage(identity, targetAddr, "chat", text, port, 10_000, opts)
+        const result = await sendP2PMessage(identity, agentId, "chat", text, port, 10_000, opts)
         if (!result.ok) {
           console.error(`[dap] Failed to send to ${agentId}: ${result.error}`)
         }

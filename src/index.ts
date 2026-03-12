@@ -2,27 +2,25 @@
  * DAP — OpenClaw plugin entry point.
  *
  * Agent ID (sha256(publicKey)[:16]) is the primary peer identifier.
- * Network addresses (Yggdrasil IPv6, QUIC endpoint) are transport-layer concerns.
+ * Transport is plain HTTP over TCP; QUIC is available as a fast optional transport.
  */
 import * as os from "os"
 import * as path from "path"
 import { execSync } from "child_process"
-import { loadOrCreateIdentity, getActualIpv6, deriveDidKey } from "./identity"
-import { startYggdrasil, stopYggdrasil, isYggdrasilAvailable, detectExternalYggdrasil, getYggdrasilNetworkInfo } from "./yggdrasil"
+import { loadOrCreateIdentity, deriveDidKey } from "./identity"
 import { initDb, listPeers, upsertPeer, removePeer, getPeer, flushDb, getPeerIds, getEndpointAddress, setTofuTtl } from "./peer-db"
 import { startPeerServer, stopPeerServer, getInbox, setSelfMeta, handleUdpMessage } from "./peer-server"
 import { sendP2PMessage, pingPeer, broadcastLeave, SendOptions } from "./peer-client"
 import { bootstrapDiscovery, startDiscoveryLoop, stopDiscoveryLoop, DEFAULT_BOOTSTRAP_PEERS } from "./peer-discovery"
 import { upsertDiscoveredPeer } from "./peer-db"
 import { buildChannel, wireInboundToGateway, CHANNEL_CONFIG_SCHEMA } from "./channel"
-import { Identity, YggdrasilInfo, PluginConfig, Endpoint } from "./types"
+import { Identity, PluginConfig, Endpoint } from "./types"
 import { TransportManager } from "./transport"
-import { YggdrasilTransport } from "./transport-yggdrasil"
 import { UDPTransport } from "./transport-quic"
 
 const DAP_TOOLS = [
   "p2p_add_peer", "p2p_discover", "p2p_list_peers",
-  "p2p_send_message", "p2p_status", "yggdrasil_check",
+  "p2p_send_message", "p2p_status",
 ]
 
 function ensureToolsAllowed(config: any): void {
@@ -65,15 +63,12 @@ function ensureChannelConfig(config: any): void {
 }
 
 let identity: Identity | null = null
-let yggInfo: YggdrasilInfo | null = null
 let dataDir: string = path.join(os.homedir(), ".openclaw", "dap")
 let peerPort: number = 8099
-let _testMode: boolean = false
 let _startupTimer: ReturnType<typeof setTimeout> | null = null
 let _bootstrapPeers: string[] = []
 let _agentMeta: { name?: string; version?: string; endpoints?: Endpoint[] } = {}
 let _transportManager: TransportManager | null = null
-let _yggTransport: YggdrasilTransport | null = null
 let _quicTransport: UDPTransport | null = null
 
 function buildSendOpts(peerIdOrAddr?: string): SendOptions {
@@ -82,22 +77,6 @@ function buildSendOpts(peerIdOrAddr?: string): SendOptions {
     endpoints: peer?.endpoints,
     quicTransport: _quicTransport?.isActive() ? _quicTransport : undefined,
   }
-}
-
-function tryConnectExternalDaemon(): YggdrasilInfo | null {
-  if (_yggTransport && identity) {
-    const ok = _yggTransport.tryHotConnect(identity)
-    if (ok) {
-      yggInfo = _yggTransport.info
-      return yggInfo
-    }
-  }
-  const ext = detectExternalYggdrasil()
-  if (!ext || !identity) return null
-  yggInfo = ext
-  identity.yggIpv6 = ext.address
-  console.log(`[p2p] Hot-connected to external daemon: ${ext.address}`)
-  return ext
 }
 
 export default function register(api: any) {
@@ -112,21 +91,10 @@ export default function register(api: any) {
       const cfg: PluginConfig = api.config?.plugins?.entries?.["dap"]?.config ?? {}
       dataDir = cfg.data_dir ?? dataDir
       peerPort = cfg.peer_port ?? peerPort
-      const extraPeers: string[] = cfg.yggdrasil_peers ?? []
       _bootstrapPeers = cfg.bootstrap_peers ?? []
       const discoveryIntervalMs: number = cfg.discovery_interval_ms ?? 10 * 60 * 1000
       const pluginVersion: string = require("../package.json").version
       _agentMeta = { name: cfg.agent_name ?? api.config?.identity?.name, version: pluginVersion }
-
-      const rawTestMode = cfg.test_mode ?? "auto"
-      const testMode = rawTestMode === "auto" ? !isYggdrasilAvailable() : rawTestMode
-      _testMode = testMode
-
-      if (rawTestMode === "auto") {
-        console.log(`[p2p] test_mode=auto -> resolved to ${testMode ? "true (yggdrasil not found)" : "false (yggdrasil available)"}`)
-      } else {
-        console.log(`[p2p] test_mode=${testMode} (explicit config override)`)
-      }
 
       const isFirstRun = !require("fs").existsSync(path.join(dataDir, "identity.json"))
       identity = loadOrCreateIdentity(dataDir)
@@ -139,39 +107,15 @@ export default function register(api: any) {
       }
 
       _transportManager = new TransportManager()
-      _yggTransport = new YggdrasilTransport()
       _quicTransport = new UDPTransport()
-
       _transportManager.register(_quicTransport)
-      if (!testMode) {
-        _transportManager.register(_yggTransport)
-      }
 
       const quicPort = cfg.quic_port ?? 8098
-      const activeTransport = await _transportManager.start(identity, {
-        dataDir,
-        extraPeers,
-        testMode,
-        quicPort,
-      })
+      const activeTransport = await _transportManager.start(identity, { dataDir, quicPort })
 
       if (activeTransport) {
         console.log(`[p2p] Active transport: ${activeTransport.id} -> ${activeTransport.address}`)
         _agentMeta.endpoints = _transportManager.getEndpoints()
-
-        if (_yggTransport.isActive()) {
-          yggInfo = _yggTransport.info
-          if (yggInfo) {
-            identity.yggIpv6 = yggInfo.address
-            console.log(`[p2p] Yggdrasil: ${yggInfo.address}  (subnet: ${yggInfo.subnet})`)
-          }
-        } else if (testMode) {
-          const actualIpv6 = getActualIpv6()
-          if (actualIpv6) {
-            identity.yggIpv6 = actualIpv6
-            console.log(`[p2p] Test mode: using actual IPv6 ${actualIpv6}`)
-          }
-        }
 
         if (_quicTransport.isActive()) {
           console.log(`[p2p] QUIC endpoint: ${_quicTransport.address}`)
@@ -180,16 +124,10 @@ export default function register(api: any) {
           })
         }
       } else {
-        console.warn("[p2p] No transport available — falling back to local-only mode")
-        if (testMode) {
-          const actualIpv6 = getActualIpv6()
-          if (actualIpv6) {
-            identity.yggIpv6 = actualIpv6
-          }
-        }
+        console.warn("[p2p] No QUIC transport available — HTTP-only mode")
       }
 
-      await startPeerServer(peerPort, { testMode, yggdrasilActive: _yggTransport?.isActive() ?? false })
+      await startPeerServer(peerPort)
 
       setSelfMeta({
         agentId: identity.agentId,
@@ -200,16 +138,13 @@ export default function register(api: any) {
       wireInboundToGateway(api)
 
       if (isFirstRun) {
-        const quicActive = _quicTransport?.isActive()
         const welcomeLines = [
           "Welcome to DAP P2P!",
           "",
           `Your Agent ID: ${identity.agentId}`,
-          yggInfo
-            ? `Yggdrasil: ${yggInfo.address}`
-            : quicActive
-              ? `QUIC transport active: ${_quicTransport!.address}\nFor full overlay networking, run: openclaw p2p setup`
-              : "Yggdrasil is not set up yet. Run: openclaw p2p setup",
+          _quicTransport?.isActive()
+            ? `QUIC transport active: ${_quicTransport.address}`
+            : "Running in HTTP-only mode.",
           "",
           "Quick start:",
           "  openclaw p2p status    — show your agent ID",
@@ -228,8 +163,7 @@ export default function register(api: any) {
         }, 2000)
       }
 
-      const defaultDelay = (yggInfo && yggInfo.pid > 0) ? 30_000 : 5_000
-      const startupDelayMs = cfg.startup_delay_ms ?? defaultDelay
+      const startupDelayMs = cfg.startup_delay_ms ?? 5_000
       console.log(`[p2p] Discovery starts in ${startupDelayMs / 1000}s`)
       _startupTimer = setTimeout(async () => {
         _startupTimer = null
@@ -254,7 +188,6 @@ export default function register(api: any) {
         await _transportManager.stop()
         _transportManager = null
       }
-      stopYggdrasil()
     },
   })
 
@@ -271,7 +204,7 @@ export default function register(api: any) {
           selectionLabel: "DAP (P2P)",
           docsPath: "/channels/dap",
           blurb: "Direct encrypted P2P messaging.",
-          aliases: ["p2p", "ygg"],
+          aliases: ["p2p"],
         },
         capabilities: { chatTypes: ["direct"] },
         configSchema: CHANNEL_CONFIG_SCHEMA,
@@ -290,9 +223,7 @@ export default function register(api: any) {
           sendText: async ({ text, account }: { text: string; account: { agentId?: string } }) => {
             if (!identity) return { ok: false }
             const agentId = account.agentId ?? ""
-            const peer = getPeer(agentId)
-            const addr = (peer ? getEndpointAddress(peer, "yggdrasil") : null) ?? agentId
-            const r = await sendP2PMessage(identity, addr, "chat", text, peerPort, 10_000, buildSendOpts(agentId))
+            const r = await sendP2PMessage(identity, agentId, "chat", text, peerPort, 10_000, buildSendOpts(agentId))
             return { ok: r.ok }
           },
         },
@@ -318,10 +249,7 @@ export default function register(api: any) {
           console.log(`Agent ID:       ${identity.agentId}`)
           console.log(`DID Key:        ${deriveDidKey(identity.publicKey)}`)
           console.log(`Version:        v${_agentMeta.version}`)
-          console.log(`Transport:      ${_transportManager?.active?.id ?? "none"}`)
-          if (_yggTransport?.isActive()) {
-            console.log(`Yggdrasil:      ${yggInfo?.address ?? identity.yggIpv6}`)
-          }
+          console.log(`Transport:      ${_transportManager?.active?.id ?? "http-only"}`)
           if (_quicTransport?.isActive()) {
             console.log(`QUIC endpoint:  ${_quicTransport.address}`)
           }
@@ -372,8 +300,7 @@ export default function register(api: any) {
         .action(async (agentId: string) => {
           console.log(`Pinging ${agentId}...`)
           const peer = getPeer(agentId)
-          const addr = (peer ? getEndpointAddress(peer, "yggdrasil") : null) ?? agentId
-          const ok = await pingPeer(addr, peerPort, 5_000, peer?.endpoints)
+          const ok = await pingPeer(agentId, peerPort, 5_000, peer?.endpoints)
           console.log(ok ? `Reachable` : `Unreachable`)
         })
 
@@ -385,9 +312,7 @@ export default function register(api: any) {
             console.error("Plugin not started. Restart the gateway first.")
             return
           }
-          const peer = getPeer(agentId)
-          const addr = (peer ? getEndpointAddress(peer, "yggdrasil") : null) ?? agentId
-          const result = await sendP2PMessage(identity, addr, "chat", message, 8099, 10_000, buildSendOpts(agentId))
+          const result = await sendP2PMessage(identity, agentId, "chat", message, 8099, 10_000, buildSendOpts(agentId))
           if (result.ok) {
             console.log(`Message sent to ${agentId}`)
           } else {
@@ -405,8 +330,7 @@ export default function register(api: any) {
           }
           const cfg: PluginConfig = api.config?.plugins?.entries?.["dap"]?.config ?? {}
           const bootstrapPeers: string[] = cfg.bootstrap_peers ?? []
-          const all = [...DEFAULT_BOOTSTRAP_PEERS, ...bootstrapPeers]
-          console.log(`Discovering peers via ${all.length || "0"} bootstrap node(s)...`)
+          console.log(`Discovering peers...`)
           const found = await bootstrapDiscovery(identity, peerPort, bootstrapPeers, _agentMeta)
           console.log(`Discovery complete — ${found} new peer(s) found. Total: ${listPeers().length}`)
         })
@@ -426,28 +350,6 @@ export default function register(api: any) {
             console.log(`  [${time}] from ${m.from}: ${m.content}`)
           }
         })
-
-      p2p
-        .command("setup")
-        .description("Install and configure Yggdrasil for P2P connectivity")
-        .action(() => {
-          const scriptPath = require("path").resolve(__dirname, "..", "scripts", "setup-yggdrasil.sh")
-          let found = ""
-          if (require("fs").existsSync(scriptPath)) found = scriptPath
-          const isRoot = process.getuid?.() === 0
-          if (found) {
-            const cmd = isRoot ? `bash "${found}"` : `sudo bash "${found}"`
-            if (!isRoot) console.log("This script requires root privileges. Requesting sudo...")
-            try {
-              require("child_process").execSync(cmd, { stdio: "inherit" })
-            } catch {
-              console.error("Setup script failed. Run manually: sudo bash " + found)
-            }
-          } else {
-            console.log("Yggdrasil setup script:")
-            console.log("  curl -fsSL https://raw.githubusercontent.com/ReScienceLab/DAP/main/scripts/setup-yggdrasil.sh | sudo bash")
-          }
-        })
     },
     { commands: ["p2p"] }
   )
@@ -465,8 +367,7 @@ export default function register(api: any) {
           `**P2P Node**`,
           `Agent ID: \`${identity.agentId}\``,
           `DID Key: \`${deriveDidKey(identity.publicKey)}\``,
-          `Transport: ${activeTransport?.id ?? "none"}`,
-          ...(_yggTransport?.isActive() ? [`Yggdrasil: \`${yggInfo?.address ?? identity.yggIpv6}\``] : []),
+          `Transport: ${activeTransport?.id ?? "http-only"}`,
           ...(_quicTransport?.isActive() ? [`QUIC: \`${_quicTransport.address}\``] : []),
           `Peers: ${peers.length} known`,
           `Inbox: ${getInbox().length} messages`,
@@ -531,9 +432,7 @@ export default function register(api: any) {
       if (!identity) {
         return { content: [{ type: "text", text: "Error: P2P service not started yet." }] }
       }
-      const peer = getPeer(params.agent_id)
-      const addr = (peer ? getEndpointAddress(peer, "yggdrasil") : null) ?? params.agent_id
-      const result = await sendP2PMessage(identity, addr, "chat", params.message, params.port ?? 8099, 10_000, buildSendOpts(params.agent_id))
+      const result = await sendP2PMessage(identity, params.agent_id, "chat", params.message, params.port ?? 8099, 10_000, buildSendOpts(params.agent_id))
       if (result.ok) {
         return { content: [{ type: "text", text: `Message delivered to ${params.agent_id}` }] }
       }
@@ -575,8 +474,7 @@ export default function register(api: any) {
         ...((_agentMeta.name) ? [`Agent name: ${_agentMeta.name}`] : []),
         `Agent ID: ${identity.agentId}`,
         `DID Key: ${deriveDidKey(identity.publicKey)}`,
-        `Active transport: ${activeTransport?.id ?? "none"}`,
-        ...(_yggTransport?.isActive() ? [`Yggdrasil: ${yggInfo?.address ?? identity.yggIpv6}`] : []),
+        `Active transport: ${activeTransport?.id ?? "http-only"}`,
         ...(_quicTransport?.isActive() ? [`QUIC endpoint: ${_quicTransport.address}`] : []),
         `Plugin version: v${_agentMeta.version}`,
         `Known peers: ${peers.length}`,
@@ -599,52 +497,6 @@ export default function register(api: any) {
       const found = await bootstrapDiscovery(identity, peerPort, bootstrapPeers, _agentMeta)
       const total = listPeers().length
       return { content: [{ type: "text", text: `Discovery complete — ${found} new peer(s) found. Known peers: ${total}` }] }
-    },
-  })
-
-  api.registerTool({
-    name: "yggdrasil_check",
-    description: "Diagnose Yggdrasil installation and daemon status.",
-    parameters: { type: "object", properties: {}, required: [] },
-    async execute(_id: string, _params: Record<string, never>) {
-      const binaryAvailable = isYggdrasilAvailable()
-
-      if (yggInfo) {
-        const netInfo = getYggdrasilNetworkInfo()
-        const lines = [
-          `Status: Ready`,
-          `Agent ID: ${identity?.agentId}`,
-          `Yggdrasil: ${yggInfo.address}`,
-          `Known peers: ${listPeers().length}`,
-        ]
-        if (netInfo) {
-          lines.push(`Network peers: ${netInfo.peerCount} (${netInfo.publicPeers} public)`)
-        }
-        return { content: [{ type: "text", text: lines.join("\n") }] }
-      }
-
-      const connected = tryConnectExternalDaemon()
-      if (connected) {
-        bootstrapDiscovery(identity!, peerPort, _bootstrapPeers, _agentMeta).catch(() => {})
-        return {
-          content: [{ type: "text", text:
-            `Status: Ready (just connected)\nAgent ID: ${identity?.agentId}\nYggdrasil: ${connected.address}\nPeer discovery started in background.`
-          }],
-        }
-      }
-
-      const action = binaryAvailable
-        ? "Yggdrasil is installed but no daemon is running."
-        : "Yggdrasil is not installed."
-      const quicStatus = _quicTransport?.isActive()
-        ? `\nQUIC fallback: active (${_quicTransport.address})\nP2P messaging works without Yggdrasil via QUIC transport.`
-        : ""
-      return {
-        content: [{ type: "text", text:
-          `Status: ${_quicTransport?.isActive() ? "Degraded (QUIC only)" : "Setup needed"}\n${action}${quicStatus}\n\n` +
-          `For full Yggdrasil overlay, run:\n  openclaw p2p setup\n\nAfter setup, call yggdrasil_check again — it will connect automatically.`
-        }],
-      }
     },
   })
 }

@@ -1,6 +1,6 @@
 // ── Transport types ──────────────────────────────────────────────────────────
 
-export type TransportType = "yggdrasil" | "quic" | "tailscale" | "tcp"
+export type TransportType = "quic" | "tailscale" | "tcp"
 
 export interface Endpoint {
   transport: TransportType
@@ -16,14 +16,6 @@ export interface Identity {
   agentId: string       // hex(sha256(publicKey))[:32] — permanent anchor
   publicKey: string     // base64 Ed25519 public key
   privateKey: string    // base64 Ed25519 private key (never leaves local storage)
-  cgaIpv6?: string      // runtime: CGA-derived address (used internally by Ygg transport)
-  yggIpv6?: string      // runtime: Yggdrasil address (set by transport layer, not persisted)
-}
-
-export interface YggdrasilInfo {
-  address: string
-  subnet: string
-  pid: number
 }
 
 // ── Wire protocol types ─────────────────────────────────────────────────────
@@ -81,8 +73,6 @@ export interface PluginConfig {
   peer_port?: number
   quic_port?: number
   data_dir?: string
-  yggdrasil_peers?: string[]
-  test_mode?: boolean | "auto"
   bootstrap_peers?: string[]
   discovery_interval_ms?: number
   startup_delay_ms?: number
