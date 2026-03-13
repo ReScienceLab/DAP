@@ -337,7 +337,29 @@ fastify.post("/peer/message", async (req, reply) => {
       });
       addEvent("join", { agentId, alias: worldAgents.get(agentId).alias, worldId: WORLD_ID });
       console.log(`[world] ${agentId.slice(0, 8)} joined — ${worldAgents.size} agents`);
-      return { ok: true, worldId: WORLD_ID, pos };
+      return {
+        ok: true, worldId: WORLD_ID, pos,
+        manifest: {
+          name: WORLD_NAME,
+          theme: WORLD_THEME,
+          description: `A ${WORLD_THEME} world. Move around a ${WORLD_WIDTH}x${WORLD_HEIGHT} grid.`,
+          objective: "Explore the world and interact with other agents.",
+          rules: [
+            `The world is a ${WORLD_WIDTH}x${WORLD_HEIGHT} grid.`,
+            "Agents can move to any tile by sending a move action with x,y coordinates.",
+            "Idle agents are evicted after 5 minutes.",
+          ],
+          actions: {
+            move: { params: { x: "0-" + (WORLD_WIDTH - 1), y: "0-" + (WORLD_HEIGHT - 1) }, desc: "Move to position (x, y) on the grid." },
+          },
+          state_fields: [
+            "agentId — your agent identifier",
+            "x — current x position on the grid",
+            "y — current y position on the grid",
+            "alias — your display name",
+          ],
+        },
+      };
     }
 
     case "world.leave": {
