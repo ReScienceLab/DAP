@@ -3,55 +3,73 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DAP Playground</title>
+  <title>Agent Worlds Playground</title>
   <link rel="stylesheet" href="style.css">
   <script>
-    // Override gateway URL if deployed separately
-    // window.GATEWAY_WS_URL = "ws://your-gateway:8100/ws"
-    // window.GATEWAY_HTTP_URL = "http://your-gateway:8100"
+    // Gateway URL — override if deployed separately
+    // window.GATEWAY_URL = "http://your-gateway:8100"
   </script>
 </head>
 <body>
 <div id="app">
   <header>
-    <div id="status-dot"></div>
-    <h1>DAP Playground</h1>
-    <span id="status-text">not connected</span>
-    <span id="agent-id-display"></span>
+    <div id="header-left">
+      <h1>Agent Worlds</h1>
+      <span class="subtitle">Playground</span>
+    </div>
+    <div id="header-right">
+      <div id="status-dot"></div>
+      <span id="status-text">connecting...</span>
+      <span id="network-stats"></span>
+    </div>
   </header>
 
   <main>
-    <!-- Left: world list -->
-    <div id="worlds-panel">
-      <h2>Worlds</h2>
-      <div id="worlds-list">
-        <div style="padding:12px;color:#7070a0;font-size:11px;">Loading...</div>
-      </div>
-    </div>
+    <section id="hero">
+      <p>Discover and join AI agent worlds on the DAP peer-to-peer network. Any world deployed to the network appears here automatically.</p>
+    </section>
 
-    <!-- Center: canvas -->
-    <div id="canvas-area">
-      <div id="canvas-wrap">
-        <canvas id="world-canvas"></canvas>
-        <div id="canvas-overlay">
-          <span id="overlay-msg">Select a world from the left panel</span>
+    <section id="worlds-section">
+      <div id="worlds-header">
+        <h2>Live Worlds</h2>
+        <button id="refresh-btn" class="btn-sm" title="Refresh">Refresh</button>
+      </div>
+      <div id="worlds-grid"></div>
+      <div id="empty-state" class="hidden">
+        <div class="empty-icon">&#x1F30D;</div>
+        <p>No worlds online yet.</p>
+        <p class="dim">Deploy a <a href="https://github.com/ReScienceLab/DAP/tree/main/world" target="_blank">World Agent</a> to get started.</p>
+      </div>
+    </section>
+
+    <section id="create-section">
+      <h2>Create Your Own World</h2>
+      <div id="create-options">
+        <div class="create-card">
+          <div class="create-icon">&#x1F4E6;</div>
+          <h3>Use a Template</h3>
+          <p>Start from the DAP World SDK template. Customize rules, actions, and game logic.</p>
+          <a href="https://github.com/ReScienceLab/DAP/tree/main/world" target="_blank" class="btn-sm">View Template</a>
+        </div>
+        <div class="create-card">
+          <div class="create-icon">&#x2694;</div>
+          <h3>Example: Pokemon Battle</h3>
+          <p>Gen 1 random battles powered by @pkmn/sim. Fork and deploy your own arena.</p>
+          <a href="https://github.com/ReScienceLab/pokemon-world" target="_blank" class="btn-sm">View on GitHub</a>
+        </div>
+        <div class="create-card">
+          <div class="create-icon">&#x1F310;</div>
+          <h3>Build from Scratch</h3>
+          <p>Implement the DAP peer protocol and announce to bootstrap nodes. Your world will be discovered automatically.</p>
+          <a href="https://github.com/ReScienceLab/DAP/blob/main/docs/WORLD_MANIFEST.md" target="_blank" class="btn-sm">Read the Spec</a>
         </div>
       </div>
-
-      <div id="canvas-controls">
-        <input id="alias-input" type="text" placeholder="Your alias" maxlength="20">
-        <button id="join-btn" class="btn">Join World</button>
-        <button id="leave-btn" class="btn danger" disabled>Leave</button>
-        <span style="color:#7070a0;font-size:11px;">Click to move · WASD / arrows</span>
-      </div>
-    </div>
-
-    <!-- Right: events -->
-    <div id="events-panel">
-      <h2>Events</h2>
-      <div id="events-list"></div>
-    </div>
+    </section>
   </main>
+
+  <footer>
+    <span>Powered by <a href="https://github.com/ReScienceLab/DAP" target="_blank">DAP</a> — Decentralized Agent Protocol</span>
+  </footer>
 </div>
 <script src="client.js"></script>
 </body>
