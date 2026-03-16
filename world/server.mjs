@@ -18,6 +18,9 @@
  *   DATA_DIR      — persistence directory (default /data)
  *   BOOTSTRAP_URL — URL of bootstrap.json (default GitHub Pages)
  *   BROADCAST_INTERVAL_MS — how often to broadcast world.state (default 5000)
+ *   MAX_AGENTS    — max agents allowed in world (default 0 = unlimited)
+ *   WORLD_PUBLIC  — whether to announce to DAP network (default "true")
+ *   WORLD_PASSWORD — password required to join (default "" = no password)
  */
 import Fastify from "fastify";
 import nacl from "tweetnacl";
@@ -37,6 +40,9 @@ const PUBLIC_ADDR = process.env.PUBLIC_ADDR ?? null; // own public IP/hostname f
 const BOOTSTRAP_URL = process.env.BOOTSTRAP_URL ?? "https://resciencelab.github.io/DAP/bootstrap.json";
 const BROADCAST_INTERVAL_MS = parseInt(process.env.BROADCAST_INTERVAL_MS ?? "5000");
 const STALE_TTL_MS = parseInt(process.env.STALE_TTL_MS ?? String(30 * 60 * 1000)); // 30 min
+const MAX_AGENTS = parseInt(process.env.MAX_AGENTS ?? "0"); // 0 = unlimited
+const WORLD_PUBLIC = (process.env.WORLD_PUBLIC ?? "true") === "true";
+const WORLD_PASSWORD = process.env.WORLD_PASSWORD ?? "";
 const MAX_EVENTS = 100;
 const MAX_PEERS = 200;
 const WORLD_WIDTH = 32;
@@ -96,6 +102,7 @@ const selfPubB64 = Buffer.from(selfKeypair.publicKey).toString("base64");
 const selfAgentId = agentIdFromPublicKey(selfPubB64);
 
 console.log(`[world] agentId=${selfAgentId} world=${WORLD_ID} name="${WORLD_NAME}"`);
+console.log(`[world] config: public=${WORLD_PUBLIC} maxAgents=${MAX_AGENTS || "unlimited"} password=${WORLD_PASSWORD ? "yes" : "no"}`);
 
 // ---------------------------------------------------------------------------
 // Peer DB (known DAP peers, including Gateway)
@@ -286,6 +293,9 @@ const fastify = Fastify({ logger: false });
 fastify.get("/peer/ping", async () => ({
   ok: true, ts: Date.now(), worldId: WORLD_ID, worldName: WORLD_NAME,
   agents: worldAgents.size,
+  maxAgents: MAX_AGENTS || undefined,
+  isPublic: WORLD_PUBLIC,
+  passwordRequired: WORLD_PASSWORD.length > 0,
 }));
 
 fastify.get("/peer/peers", async () => ({
@@ -341,6 +351,12 @@ fastify.post("/peer/message", async (req, reply) => {
 
   switch (msg.event) {
     case "world.join": {
+      if (MAX_AGENTS > 0 && worldAgents.size >= MAX_AGENTS) {
+        return reply.code(403).send({ error: `World is full (${MAX_AGENTS}/${MAX_AGENTS} agents)` });
+      }
+      if (WORLD_PASSWORD && data.password !== WORLD_PASSWORD) {
+        return reply.code(403).send({ error: "Invalid password" });
+      }
       const pos = randomPos();
       worldAgents.set(agentId, {
         agentId,
@@ -410,10 +426,14 @@ fastify.post("/peer/message", async (req, reply) => {
 await fastify.listen({ port: PORT, host: "::" });
 console.log(`[world] Listening on [::]:${PORT}  world=${WORLD_ID}`);
 
-// Bootstrap discovery after 3s
-setTimeout(bootstrapDiscovery, 3_000);
-// Re-announce every 10min
-setInterval(bootstrapDiscovery, 10 * 60 * 1000);
+// Bootstrap discovery (only for public worlds)
+if (WORLD_PUBLIC) {
+  setTimeout(bootstrapDiscovery, 3_000);
+  setInterval(bootstrapDiscovery, 10 * 60 * 1000);
+  console.log(`[world] Public mode — will announce to DAP network`);
+} else {
+  console.log(`[world] Private mode — skipping DAP network announce`);
+}
 // Prune stale peers every 5 minutes
 setInterval(() => pruneStale(), 5 * 60 * 1000);
 
