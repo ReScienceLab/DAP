@@ -38,13 +38,14 @@ export function registerPeerRoutes(
 
   // Agent Card endpoint (optional — only registered when card opts are provided)
   if (card) {
-    let cachedCard: Record<string, unknown> | null = null
+    let cachedCardJson: string | null = null
     fastify.get("/.well-known/agent.json", async (_req, reply) => {
-      if (!cachedCard) {
-        cachedCard = await buildSignedAgentCard(card, identity)
+      if (!cachedCardJson) {
+        cachedCardJson = await buildSignedAgentCard(card, identity)
       }
+      reply.header("Content-Type", "application/json; charset=utf-8")
       reply.header("Cache-Control", "public, max-age=300")
-      return cachedCard
+      reply.send(cachedCardJson)
     })
   }
 

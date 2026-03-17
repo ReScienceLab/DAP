@@ -367,20 +367,21 @@ app.get("/health", async () => ({
   peers: peers.size, worlds: findByCapability("world:").length,
 }));
 
-// Agent Card — served when PUBLIC_URL is configured
-let _cachedCard = null;
+// Agent Card — served as canonical JSON so bytes on wire match the JWS signature
+let _cachedCardJson = null;
 app.get("/.well-known/agent.json", async (_req, reply) => {
-  if (!_cachedCard) {
+  if (!_cachedCardJson) {
     const cardUrl = PUBLIC_URL
       ? `${PUBLIC_URL.replace(/\/$/, "")}/.well-known/agent.json`
       : `http://${PUBLIC_ADDR ?? "localhost"}:${HTTP_PORT}/.well-known/agent.json`;
-    _cachedCard = await buildSignedAgentCard(
+    _cachedCardJson = await buildSignedAgentCard(
       { name: "DAP Gateway", cardUrl, profiles: ["core/v0.2"], nodeClass: "CoreNode" },
       identity
     );
   }
+  reply.header("Content-Type", "application/json; charset=utf-8");
   reply.header("Cache-Control", "public, max-age=300");
-  return _cachedCard;
+  reply.send(_cachedCardJson);
 });
 
 app.get("/agents", async () => ({

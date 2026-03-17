@@ -40,12 +40,16 @@ export interface AgentCardOpts {
 /**
  * Build and JWS-sign an AgentWire v0.2 Agent Card.
  *
- * @returns The full signed card object — serve it directly as JSON.
+ * Returns the canonical JSON string that MUST be served verbatim as
+ * `application/json`. The JWS signature covers
+ * `JSON.stringify(canonicalize(cardWithoutSignatures))`, so verification
+ * requires the verifier to strip the `signatures` field, re-canonicalize,
+ * and attach the result as the JWS payload.
  */
 export async function buildSignedAgentCard(
   opts: AgentCardOpts,
   identity: Identity
-): Promise<Record<string, unknown>> {
+): Promise<string> {
   const profiles = opts.profiles ?? ["core/v0.2"]
   const nodeClass = opts.nodeClass ?? "CoreNode"
   const did = deriveDidKey(identity.pubB64)
@@ -94,6 +98,9 @@ export async function buildSignedAgentCard(
     .setProtectedHeader({ alg: "EdDSA", kid: "#identity" })
     .sign(privateKey)
 
-  // Only include protected + signature (payload is the card body itself)
-  return { ...card, signatures: [{ protected: jws.protected, signature: jws.signature }] }
+  // Return the signed card as a canonical JSON string.
+  // Serving this string verbatim ensures the bytes on the wire exactly match
+  // what was signed, making verification unambiguous.
+  const signedCard = { ...canonicalize(card) as object, signatures: [{ protected: jws.protected, signature: jws.signature }] }
+  return JSON.stringify(canonicalize(signedCard))
 }
