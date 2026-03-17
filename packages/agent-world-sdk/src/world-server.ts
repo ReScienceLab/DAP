@@ -39,6 +39,9 @@ export async function createWorldServer(
     discoveryIntervalMs = 10 * 60 * 1000,
     staleTtlMs = 30 * 60 * 1000,
     setupRoutes,
+    cardUrl,
+    cardName,
+    cardDescription,
   } = config
 
   const resolvedPublicPort = publicPort ?? port
@@ -57,6 +60,9 @@ export async function createWorldServer(
   registerPeerRoutes(fastify, {
     identity,
     peerDb,
+    card: cardUrl
+      ? { name: cardName ?? worldName, description: cardDescription, cardUrl }
+      : undefined,
     pingExtra: () => ({
       worldId,
       worldName,

@@ -23,6 +23,8 @@ ENV PEER_PORT=8099
 ENV HTTP_PORT=8100
 ENV DATA_DIR=/data
 ENV DISCOVERY_INTERVAL_MS=60000
+# Set PUBLIC_URL to enable Agent Card, e.g. https://gateway.example.com
+ENV PUBLIC_URL=""
 
 EXPOSE 8099 8100
 

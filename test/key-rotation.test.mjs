@@ -1,6 +1,5 @@
 import { test, describe, before, after } from "node:test"
 import assert from "node:assert/strict"
-import { sha256 } from "@noble/hashes/sha256"
 import * as os from "node:os"
 import * as fs from "node:fs"
 import * as path from "node:path"
@@ -16,7 +15,7 @@ function makeKeypair() {
   const kp = nacl.sign.keyPair()
   const pubB64 = Buffer.from(kp.publicKey).toString("base64")
   const privB64 = Buffer.from(kp.secretKey.slice(0, 32)).toString("base64")
-  const agentId = Buffer.from(sha256(kp.publicKey)).toString("hex").slice(0, 32)
+  const agentId = agentIdFromPublicKey(pubB64)
   return { publicKey: pubB64, privateKey: privB64, agentId }
 }
 

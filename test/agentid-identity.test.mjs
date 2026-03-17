@@ -6,11 +6,10 @@ import * as path from "path"
 import * as os from "os"
 
 describe("agentIdFromPublicKey", () => {
-  it("returns a 32-character hex string", () => {
+  it("returns aw:sha256:<64hex> format", () => {
     const id = generateIdentity()
     const agentId = agentIdFromPublicKey(id.publicKey)
-    assert.equal(agentId.length, 32)
-    assert.match(agentId, /^[0-9a-f]{32}$/)
+    assert.match(agentId, /^aw:sha256:[0-9a-f]{64}$/)
   })
 
   it("is deterministic for the same key", () => {
@@ -52,7 +51,7 @@ describe("generateIdentity", () => {
   it("includes agentId field", () => {
     const id = generateIdentity()
     assert.ok(id.agentId)
-    assert.equal(id.agentId.length, 32)
+    assert.match(id.agentId, /^aw:sha256:[0-9a-f]{64}$/)
   })
 
   it("does not include cgaIpv6 or yggIpv6 (transport-layer concerns)", () => {
@@ -108,7 +107,7 @@ describe("loadOrCreateIdentity", () => {
 
     const loaded = loadOrCreateIdentity(tmpDir)
     assert.ok(loaded.agentId)
-    assert.equal(loaded.agentId.length, 32)
+    assert.match(loaded.agentId, /^aw:sha256:[0-9a-f]{64}$/)
 
     const persisted = JSON.parse(fs.readFileSync(idFile, "utf-8"))
     assert.equal(persisted.agentId, loaded.agentId)

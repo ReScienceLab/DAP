@@ -4,6 +4,43 @@ import nacl from "tweetnacl"
 import { agentIdFromPublicKey } from "./crypto.js"
 import type { Identity } from "./types.js"
 
+// ── did:key / multibase ──────────────────────────────────────────────────────
+
+const MULTICODEC_ED25519_PREFIX = Buffer.from([0xed, 0x01])
+const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+function base58Encode(buf: Buffer): string {
+  const digits = [0]
+  for (const byte of buf) {
+    let carry = byte
+    for (let j = 0; j < digits.length; j++) {
+      carry += digits[j] << 8
+      digits[j] = carry % 58
+      carry = (carry / 58) | 0
+    }
+    while (carry > 0) {
+      digits.push(carry % 58)
+      carry = (carry / 58) | 0
+    }
+  }
+  let str = ""
+  for (let i = 0; i < buf.length && buf[i] === 0; i++) str += "1"
+  for (let i = digits.length - 1; i >= 0; i--) str += BASE58_ALPHABET[digits[i]]
+  return str
+}
+
+/** Returns `did:key:z<base58(multicodec_ed25519 + pubBytes)>` */
+export function deriveDidKey(pubB64: string): string {
+  const pubBytes = Buffer.from(pubB64, "base64")
+  const prefixed = Buffer.concat([MULTICODEC_ED25519_PREFIX, pubBytes])
+  return `did:key:z${base58Encode(prefixed)}`
+}
+
+/** Returns the `z<base58multicodec>` multibase string for the public key */
+export function toPublicKeyMultibase(pubB64: string): string {
+  return deriveDidKey(pubB64).slice("did:key:".length)
+}
+
 /**
  * Load an existing Ed25519 identity from dataDir or create a new one.
  * @param dataDir  Directory where identity file is stored

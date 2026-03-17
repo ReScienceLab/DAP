@@ -45,6 +45,12 @@ export interface WorldConfig {
    * Use this to register additional Fastify routes (e.g. static files, REST endpoints).
    */
   setupRoutes?: (fastify: import("fastify").FastifyInstance) => void | Promise<void>
+  /** If provided, serve GET /.well-known/agent.json with a JWS-signed Agent Card */
+  cardUrl?: string
+  /** Agent name for the card (defaults to worldName) */
+  cardName?: string
+  /** Agent description for the card */
+  cardDescription?: string
   worldName?: string
   worldTheme?: string
   /** Listen port (default 8099) */

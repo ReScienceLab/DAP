@@ -36,11 +36,13 @@ import {
   signHttpRequest,
   verifyHttpRequestHeaders,
   loadOrCreateIdentity,
+  buildSignedAgentCard,
 } from "@resciencelab/agent-world-sdk";
 
 const PEER_PORT = parseInt(process.env.PEER_PORT ?? "8099");
 const HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8100");
 const PUBLIC_ADDR = process.env.PUBLIC_ADDR ?? null;
+const PUBLIC_URL = process.env.PUBLIC_URL ?? null; // e.g. https://gateway.example.com
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
 const BOOTSTRAP_URL = process.env.BOOTSTRAP_URL ?? "https://resciencelab.github.io/DAP/bootstrap.json";
 const DISCOVERY_INTERVAL_MS = parseInt(process.env.DISCOVERY_INTERVAL_MS ?? "60000");
@@ -364,6 +366,22 @@ app.get("/health", async () => ({
   ok: true, ts: Date.now(), agentId: selfAgentId,
   peers: peers.size, worlds: findByCapability("world:").length,
 }));
+
+// Agent Card — served when PUBLIC_URL is configured
+let _cachedCard = null;
+app.get("/.well-known/agent.json", async (_req, reply) => {
+  if (!_cachedCard) {
+    const cardUrl = PUBLIC_URL
+      ? `${PUBLIC_URL.replace(/\/$/, "")}/.well-known/agent.json`
+      : `http://${PUBLIC_ADDR ?? "localhost"}:${HTTP_PORT}/.well-known/agent.json`;
+    _cachedCard = await buildSignedAgentCard(
+      { name: "DAP Gateway", cardUrl, profiles: ["core/v0.2"], nodeClass: "CoreNode" },
+      identity
+    );
+  }
+  reply.header("Cache-Control", "public, max-age=300");
+  return _cachedCard;
+});
 
 app.get("/agents", async () => ({
   agents: getPeersForExchange(100),

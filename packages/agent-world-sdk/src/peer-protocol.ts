@@ -1,7 +1,11 @@
 import type { FastifyInstance } from "fastify"
 import { agentIdFromPublicKey, canonicalize, verifySignature, verifyHttpRequestHeaders } from "./crypto.js"
+import { buildSignedAgentCard } from "./card.js"
+import type { AgentCardOpts } from "./card.js"
 import type { Identity } from "./types.js"
 import type { PeerDb as PeerDbType } from "./peer-db.js"
+
+export type { AgentCardOpts }
 
 export interface PeerProtocolOpts {
   identity: Identity
@@ -15,6 +19,8 @@ export interface PeerProtocolOpts {
     content: unknown,
     reply: (body: unknown, statusCode?: number) => void
   ) => Promise<void>
+  /** If provided, serve GET /.well-known/agent.json with a JWS-signed Agent Card */
+  card?: AgentCardOpts
 }
 
 /**
@@ -28,7 +34,19 @@ export function registerPeerRoutes(
   fastify: FastifyInstance,
   opts: PeerProtocolOpts
 ): void {
-  const { identity, peerDb, pingExtra, onMessage } = opts
+  const { identity, peerDb, pingExtra, onMessage, card } = opts
+
+  // Agent Card endpoint (optional — only registered when card opts are provided)
+  if (card) {
+    let cachedCard: Record<string, unknown> | null = null
+    fastify.get("/.well-known/agent.json", async (_req, reply) => {
+      if (!cachedCard) {
+        cachedCard = await buildSignedAgentCard(card, identity)
+      }
+      reply.header("Cache-Control", "public, max-age=300")
+      return cachedCard
+    })
+  }
 
   fastify.get("/peer/ping", async () => ({
     ok: true,
