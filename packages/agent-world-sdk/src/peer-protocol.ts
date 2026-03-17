@@ -6,14 +6,14 @@ import type { PeerDb as PeerDbType } from "./peer-db.js"
 export interface PeerProtocolOpts {
   identity: Identity
   peerDb: PeerDbType
-  /** Extra fields to include in /peer/ping response */
-  pingExtra?: Record<string, unknown>
+  /** Extra fields to include in /peer/ping response (evaluated on every request) */
+  pingExtra?: Record<string, unknown> | (() => Record<string, unknown>)
   /** Called when a non-peer-protocol message arrives. Return reply body or null to skip. */
   onMessage?: (
     agentId: string,
     event: string,
     content: unknown,
-    reply: (body: unknown) => void
+    reply: (body: unknown, statusCode?: number) => void
   ) => Promise<void>
 }
 
@@ -34,7 +34,7 @@ export function registerPeerRoutes(
     ok: true,
     ts: Date.now(),
     agentId: identity.agentId,
-    ...pingExtra,
+    ...(typeof pingExtra === "function" ? pingExtra() : pingExtra),
   }))
 
   fastify.get("/peer/peers", async () => ({
@@ -95,8 +95,9 @@ export function registerPeerRoutes(
 
     if (onMessage) {
       let replied = false
-      await onMessage(agentId, msg.event as string, content, (body) => {
+      await onMessage(agentId, msg.event as string, content, (body, statusCode) => {
         replied = true
+        if (statusCode) reply.code(statusCode)
         reply.send(body)
       })
       if (!replied) return { ok: true }

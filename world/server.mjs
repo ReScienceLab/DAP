@@ -58,6 +58,9 @@ function randomPos() {
 
 function getWorldSnapshot() {
   return {
+    worldId: WORLD_ID,
+    worldName: process.env.WORLD_NAME ?? `World (${WORLD_ID})`,
+    theme: process.env.WORLD_THEME ?? "default",
     agentCount: worldAgents.size,
     agents: [...worldAgents.values()],
     recentEvents: events.slice(-20),

@@ -57,25 +57,25 @@ export async function createWorldServer(
   registerPeerRoutes(fastify, {
     identity,
     peerDb,
-    pingExtra: {
+    pingExtra: () => ({
       worldId,
       worldName,
       agents: agentLastSeen.size,
       ...(maxAgents ? { maxAgents } : {}),
       isPublic,
       passwordRequired: password.length > 0,
-    },
+    }),
     onMessage: async (agentId, event, content, sendReply) => {
       const data = (content ?? {}) as Record<string, unknown>
 
       switch (event) {
         case "world.join": {
           if (maxAgents > 0 && agentLastSeen.size >= maxAgents) {
-            sendReply({ error: `World is full (${maxAgents}/${maxAgents} agents)` })
+            sendReply({ error: `World is full (${maxAgents}/${maxAgents} agents)` }, 403)
             return
           }
           if (password && data["password"] !== password) {
-            sendReply({ error: "Invalid password" })
+            sendReply({ error: "Invalid password" }, 403)
             return
           }
           agentLastSeen.set(agentId, Date.now())
@@ -98,7 +98,7 @@ export async function createWorldServer(
 
         case "world.action": {
           if (!agentLastSeen.has(agentId)) {
-            sendReply({ error: "Agent not in world — join first" })
+            sendReply({ error: "Agent not in world — join first" }, 400)
             return
           }
           agentLastSeen.set(agentId, Date.now())
