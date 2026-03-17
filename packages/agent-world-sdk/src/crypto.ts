@@ -2,10 +2,10 @@ import crypto from "node:crypto"
 import nacl from "tweetnacl"
 
 export function agentIdFromPublicKey(publicKeyB64: string): string {
-  return crypto.createHash("sha256")
+  const fullHex = crypto.createHash("sha256")
     .update(Buffer.from(publicKeyB64, "base64"))
     .digest("hex")
-    .slice(0, 32)
+  return `aw:sha256:${fullHex}`
 }
 
 export function canonicalize(value: unknown): unknown {

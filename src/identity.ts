@@ -46,7 +46,8 @@ export function deriveDidKey(publicKeyB64: string): string {
 
 export function agentIdFromPublicKey(publicKeyB64: string): string {
   const pubBytes = Buffer.from(publicKeyB64, "base64")
-  return Buffer.from(sha256(pubBytes)).toString("hex").slice(0, 32)
+  const fullHex = Buffer.from(sha256(pubBytes)).toString("hex")
+  return `aw:sha256:${fullHex}`
 }
 
 export function generateIdentity(): Identity {
@@ -57,11 +58,8 @@ export function generateIdentity(): Identity {
   const pubB64 = Buffer.from(pubBytes).toString("base64")
   const privB64 = Buffer.from(privBytes).toString("base64")
 
-  const hashHex = Buffer.from(sha256(pubBytes)).toString("hex")
-  const agentId = hashHex.slice(0, 32)
-
   return {
-    agentId,
+    agentId: agentIdFromPublicKey(pubB64),
     publicKey: pubB64,
     privateKey: privB64,
   }
@@ -71,7 +69,8 @@ export function loadOrCreateIdentity(dataDir: string): Identity {
   const idFile = path.join(dataDir, "identity.json")
   if (fs.existsSync(idFile)) {
     const raw = JSON.parse(fs.readFileSync(idFile, "utf-8"))
-    if (!raw.agentId && raw.publicKey) {
+    // Migrate missing or legacy 32-char truncated agentId → aw:sha256:<64hex>
+    if (!raw.agentId || /^[0-9a-f]{32}$/.test(raw.agentId)) {
       raw.agentId = agentIdFromPublicKey(raw.publicKey)
       fs.writeFileSync(idFile, JSON.stringify(raw, null, 2))
     }
