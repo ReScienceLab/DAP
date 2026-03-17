@@ -235,8 +235,13 @@ export async function startPeerServer(port: number = 8099, opts?: PeerServerOpti
     }
 
     const agentId: string = rot.oldIdentity.agentId
-    const oldPublicKeyB64 = multibaseToBase64(rot.oldIdentity.publicKeyMultibase)
-    const newPublicKeyB64 = multibaseToBase64(rot.newIdentity.publicKeyMultibase)
+    let oldPublicKeyB64: string, newPublicKeyB64: string
+    try {
+      oldPublicKeyB64 = multibaseToBase64(rot.oldIdentity.publicKeyMultibase)
+      newPublicKeyB64 = multibaseToBase64(rot.newIdentity.publicKeyMultibase)
+    } catch {
+      return reply.code(400).send({ error: "Invalid publicKeyMultibase encoding" })
+    }
     const timestamp: number = rot.timestamp
 
     if (agentIdFromPublicKey(oldPublicKeyB64) !== agentId) {

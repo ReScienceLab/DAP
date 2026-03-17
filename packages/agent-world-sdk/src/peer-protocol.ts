@@ -182,8 +182,13 @@ export function registerPeerRoutes(
     }
 
     const agentId = rot.oldIdentity.agentId
-    const oldPublicKeyB64 = multibaseToBase64(rot.oldIdentity.publicKeyMultibase)
-    const newPublicKeyB64 = multibaseToBase64(rot.newIdentity.publicKeyMultibase)
+    let oldPublicKeyB64: string, newPublicKeyB64: string
+    try {
+      oldPublicKeyB64 = multibaseToBase64(rot.oldIdentity.publicKeyMultibase)
+      newPublicKeyB64 = multibaseToBase64(rot.newIdentity.publicKeyMultibase)
+    } catch {
+      return reply.code(400).send({ error: "Invalid publicKeyMultibase encoding" })
+    }
     const timestamp = rot.timestamp
 
     if (agentIdFromPublicKey(oldPublicKeyB64) !== agentId) {

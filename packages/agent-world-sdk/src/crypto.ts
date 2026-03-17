@@ -219,11 +219,15 @@ export function verifyHttpResponseHeaders(
   body: string,
   publicKeyB64: string
 ): { ok: boolean; error?: string } {
-  const sig = headers["x-agentwire-signature"]
-  const from = headers["x-agentwire-from"]
-  const kid = headers["x-agentwire-keyid"]
-  const ts = headers["x-agentwire-timestamp"]
-  const cd = headers["content-digest"]
+  // Normalize to lowercase so callers can pass title-cased AwResponseHeaders or fetch Headers
+  const h: Record<string, string | null> = {}
+  for (const [k, v] of Object.entries(headers)) h[k.toLowerCase()] = v
+
+  const sig = h["x-agentwire-signature"]
+  const from = h["x-agentwire-from"]
+  const kid = h["x-agentwire-keyid"]
+  const ts = h["x-agentwire-timestamp"]
+  const cd = h["content-digest"]
 
   if (!sig || !from || !kid || !ts || !cd) {
     return { ok: false, error: "Missing required AgentWire response headers" }
