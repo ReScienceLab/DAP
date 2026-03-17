@@ -94,3 +94,29 @@ export interface WorldServer {
   identity: Identity
   stop(): Promise<void>
 }
+
+// ── Key rotation (AgentWire v0.2 §6.10/§10.4) ────────────────────────────────
+
+export interface KeyRotationIdentity {
+  agentId: string
+  kid: string
+  publicKeyMultibase: string
+}
+
+export interface KeyRotationRequest {
+  type: "key-rotation"
+  version: "0.2"
+  logicalCardUrl?: string
+  oldIdentity: KeyRotationIdentity
+  newIdentity: KeyRotationIdentity
+  timestamp: number
+  /** ISO-8601: when rotation is effective */
+  effectiveAt?: string
+  /** ISO-8601: end of overlap window where old key is still accepted */
+  overlapUntil?: string
+  reason?: string
+  proofs: {
+    signedByOld: string
+    signedByNew: string
+  }
+}

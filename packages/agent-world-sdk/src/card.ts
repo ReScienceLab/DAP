@@ -35,6 +35,8 @@ export interface AgentCardOpts {
   profiles?: string[]
   /** Conformance node class. Defaults to "CoreNode" */
   nodeClass?: string
+  /** Capabilities advertised in conformance block. Defaults to standard core/v0.2 set. */
+  capabilities?: string[]
 }
 
 /**
@@ -85,6 +87,12 @@ export async function buildSignedAgentCard(
         conformance: {
           nodeClass,
           profiles: profiles.map((id) => ({ id, required: id === "core/v0.2" })),
+          capabilities: opts.capabilities ?? [
+            "signed-card-jws",
+            "signed-http-requests",
+            "signed-http-responses",
+            "tofu-key-binding",
+          ],
         },
       },
     },

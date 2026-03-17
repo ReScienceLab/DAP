@@ -1,8 +1,9 @@
 import type { FastifyInstance } from "fastify"
-import { agentIdFromPublicKey, canonicalize, verifySignature, verifyHttpRequestHeaders } from "./crypto.js"
+import { createHash } from "node:crypto"
+import { agentIdFromPublicKey, canonicalize, verifySignature, verifyHttpRequestHeaders, signHttpResponse } from "./crypto.js"
 import { buildSignedAgentCard } from "./card.js"
 import type { AgentCardOpts } from "./card.js"
-import type { Identity } from "./types.js"
+import type { Identity, KeyRotationRequest } from "./types.js"
 import type { PeerDb as PeerDbType } from "./peer-db.js"
 
 export type { AgentCardOpts }
@@ -36,15 +37,32 @@ export function registerPeerRoutes(
 ): void {
   const { identity, peerDb, pingExtra, onMessage, card } = opts
 
+  // Sign all /peer/* JSON responses (P2a — AgentWire v0.2 response signing)
+  fastify.addHook("onSend", async (_req, reply, payload) => {
+    if (typeof payload !== "string") return payload
+    const url = (_req.url ?? "").split("?")[0]
+    if (!url.startsWith("/peer/")) return payload
+    const ct = reply.getHeader("content-type") as string | undefined
+    if (!ct || !ct.includes("application/json")) return payload
+    const hdrs = signHttpResponse(identity, reply.statusCode, payload)
+    for (const [k, v] of Object.entries(hdrs)) reply.header(k, v)
+    return payload
+  })
+
   // Agent Card endpoint (optional — only registered when card opts are provided)
   if (card) {
     let cachedCardJson: string | null = null
+    let cachedEtag: string | null = null
     fastify.get("/.well-known/agent.json", async (_req, reply) => {
       if (!cachedCardJson) {
         cachedCardJson = await buildSignedAgentCard(card, identity)
+        const hash = createHash("sha256")
+          .update(cachedCardJson, "utf8").digest("hex").slice(0, 16)
+        cachedEtag = `"${hash}"`
       }
       reply.header("Content-Type", "application/json; charset=utf-8")
       reply.header("Cache-Control", "public, max-age=300")
+      reply.header("ETag", cachedEtag!)
       reply.send(cachedCardJson)
     })
   }
@@ -149,4 +167,89 @@ export function registerPeerRoutes(
       return { ok: true }
     }
   })
+
+  // POST /peer/key-rotation — AgentWire v0.2 §6.10/§10.4
+  fastify.post("/peer/key-rotation", async (req, reply) => {
+    const rot = req.body as unknown as KeyRotationRequest
+
+    if (rot?.type !== "key-rotation" || rot?.version !== "0.2") {
+      return reply.code(400).send({ error: "Expected type=key-rotation and version=0.2" })
+    }
+
+    if (!rot.oldIdentity?.agentId || !rot.oldIdentity?.publicKeyMultibase ||
+        !rot.newIdentity?.publicKeyMultibase || !rot.proofs?.signedByOld || !rot.proofs?.signedByNew) {
+      return reply.code(400).send({ error: "Missing required key rotation fields" })
+    }
+
+    const agentId = rot.oldIdentity.agentId
+    let oldPublicKeyB64: string, newPublicKeyB64: string
+    try {
+      oldPublicKeyB64 = multibaseToBase64(rot.oldIdentity.publicKeyMultibase)
+      newPublicKeyB64 = multibaseToBase64(rot.newIdentity.publicKeyMultibase)
+    } catch {
+      return reply.code(400).send({ error: "Invalid publicKeyMultibase encoding" })
+    }
+    const timestamp = rot.timestamp
+
+    if (agentIdFromPublicKey(oldPublicKeyB64) !== agentId) {
+      return reply.code(400).send({ error: "agentId does not match oldPublicKey" })
+    }
+
+    const MAX_AGE_MS = 5 * 60 * 1000
+    if (timestamp && Math.abs(Date.now() - timestamp) > MAX_AGE_MS) {
+      return reply.code(400).send({ error: "Key rotation timestamp too old or too far in the future" })
+    }
+
+    const signable = {
+      agentId,
+      oldPublicKey: oldPublicKeyB64,
+      newPublicKey: newPublicKeyB64,
+      timestamp,
+    }
+    if (!verifySignature(oldPublicKeyB64, signable, rot.proofs.signedByOld)) {
+      return reply.code(403).send({ error: "Invalid signatureByOldKey" })
+    }
+    if (!verifySignature(newPublicKeyB64, signable, rot.proofs.signedByNew)) {
+      return reply.code(403).send({ error: "Invalid signatureByNewKey" })
+    }
+
+    const known = peerDb.get(agentId)
+    if (known?.publicKey && known.publicKey !== oldPublicKeyB64) {
+      return reply.code(403).send({ error: "TOFU binding mismatch — key-loss recovery requires manual re-pairing" })
+    }
+
+    peerDb.upsert(agentId, newPublicKeyB64, {})
+    return { ok: true }
+  })
+}
+
+/** Convert a multibase (z<base58btc>) Ed25519 public key to base64. */
+function multibaseToBase64(multibase: string): string {
+  if (!multibase.startsWith("z")) throw new Error("Unsupported multibase prefix")
+  const bytes = base58Decode(multibase.slice(1))
+  const keyBytes = bytes.length === 34 ? bytes.slice(2) : bytes
+  return Buffer.from(keyBytes).toString("base64")
+}
+
+const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+function base58Decode(str: string): Uint8Array {
+  const bytes = [0]
+  for (const char of str) {
+    let carry = BASE58_ALPHABET.indexOf(char)
+    if (carry < 0) throw new Error(`Invalid base58 char: ${char}`)
+    for (let j = 0; j < bytes.length; j++) {
+      carry += bytes[j] * 58
+      bytes[j] = carry & 0xff
+      carry >>= 8
+    }
+    while (carry > 0) {
+      bytes.push(carry & 0xff)
+      carry >>= 8
+    }
+  }
+  for (const char of str) {
+    if (char === "1") bytes.push(0)
+    else break
+  }
+  return new Uint8Array(bytes.reverse())
 }
