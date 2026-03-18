@@ -386,4 +386,51 @@ describe("Domain-Separated Signatures", () => {
       assert.ok(err);
     }
   });
+
+  test("Agent Card round-trip: sign and verify", async () => {
+    const { buildSignedAgentCard, verifyAgentCard } = await import(
+      "../packages/agent-world-sdk/dist/card.js"
+    );
+
+    const identity = {
+      agentId: "aw:sha256:test123",
+      pubB64: publicKeyB64,
+      secretKey: secretKey,
+    };
+
+    const cardJson = await buildSignedAgentCard(
+      {
+        name: "Test Agent",
+        cardUrl: "https://example.com/.well-known/agent.json",
+      },
+      identity
+    );
+
+    // Should verify with correct public key
+    const valid = verifyAgentCard(cardJson, publicKeyB64);
+    assert.ok(valid, "Agent Card should verify with correct public key");
+
+    // Should fail with wrong public key
+    const wrongKeypair = nacl.sign.keyPair();
+    const wrongPubB64 = Buffer.from(wrongKeypair.publicKey).toString(
+      "base64"
+    );
+    const invalidWithWrongKey = verifyAgentCard(cardJson, wrongPubB64);
+    assert.equal(
+      invalidWithWrongKey,
+      false,
+      "Agent Card should fail with wrong public key"
+    );
+
+    // Should fail with tampered card
+    const card = JSON.parse(cardJson);
+    card.name = "TAMPERED";
+    const tamperedJson = JSON.stringify(card);
+    const invalidTampered = verifyAgentCard(tamperedJson, publicKeyB64);
+    assert.equal(
+      invalidTampered,
+      false,
+      "Agent Card should fail when tampered"
+    );
+  });
 });

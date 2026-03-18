@@ -10,7 +10,12 @@
  */
 import { FlattenedSign } from "jose";
 import { createPrivateKey } from "node:crypto";
-import { canonicalize, DOMAIN_SEPARATORS } from "./crypto.js";
+import nacl from "tweetnacl";
+import {
+  canonicalize,
+  DOMAIN_SEPARATORS,
+  verifyWithDomainSeparator,
+} from "./crypto.js";
 import { deriveDidKey, toPublicKeyMultibase } from "./identity.js";
 import { PROTOCOL_VERSION } from "./version.js";
 import type { Identity } from "./types.js";
@@ -126,4 +131,76 @@ export async function buildSignedAgentCard(
     signatures: [{ protected: jws.protected, signature: jws.signature }],
   };
   return JSON.stringify(canonicalize(signedCard));
+}
+
+/**
+ * Verify an Agent Card JWS signature.
+ *
+ * Reconstructs the domain-separated payload and verifies the EdDSA signature
+ * using the AGENT_CARD domain separator. The card must have been signed with
+ * buildSignedAgentCard().
+ *
+ * This helper function implements the AgentWire-compliant JWS verification flow:
+ * 1. Extract the signatures field and protected header from the card
+ * 2. Strip signatures to get the unsigned card
+ * 3. Canonicalize the unsigned card
+ * 4. Prepend DOMAIN_SEPARATORS.AGENT_CARD
+ * 5. Reconstruct JWS signing input: BASE64URL(protected) + '.' + BASE64URL(payload)
+ * 6. Verify the Ed25519 signature over the JWS signing input
+ *
+ * @param cardJson - The signed Agent Card JSON string
+ * @param expectedPublicKeyB64 - Base64-encoded Ed25519 public key to verify against
+ * @returns true if signature is valid, false otherwise
+ */
+export function verifyAgentCard(
+  cardJson: string,
+  expectedPublicKeyB64: string
+): boolean {
+  try {
+    const card = JSON.parse(cardJson);
+
+    // Extract signature entry
+    const signatures = card.signatures;
+    if (!signatures || signatures.length === 0) {
+      return false;
+    }
+
+    const jwsProtected = signatures[0].protected;
+    const jwsSignature = signatures[0].signature;
+
+    // Remove signatures field to get unsigned card
+    const { signatures: _, ...unsignedCard } = card;
+
+    // Reconstruct domain-separated payload
+    const canonicalCard = JSON.stringify(canonicalize(unsignedCard));
+    const domainPrefix = Buffer.from(DOMAIN_SEPARATORS.AGENT_CARD, "utf8");
+    const cardBytes = Buffer.from(canonicalCard, "utf8");
+    const payload = Buffer.concat([domainPrefix, cardBytes]);
+
+    // Convert payload to base64url for JWS signing input
+    const payloadBase64url = Buffer.from(payload)
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=/g, "");
+
+    // Reconstruct JWS signing input: protected + '.' + payload
+    const jwsSigningInput = Buffer.from(
+      jwsProtected + "." + payloadBase64url,
+      "utf8"
+    );
+
+    // Verify signature (JWS signatures are base64url encoded)
+    const signatureBytes = Buffer.from(jwsSignature, "base64url");
+    const publicKeyBytes = Buffer.from(expectedPublicKeyB64, "base64");
+
+    // Verify the Ed25519 signature over the JWS signing input
+    return nacl.sign.detached.verify(
+      jwsSigningInput,
+      signatureBytes,
+      publicKeyBytes
+    );
+  } catch {
+    return false;
+  }
 }

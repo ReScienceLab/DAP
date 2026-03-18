@@ -19,7 +19,7 @@ export {
   deriveDidKey,
   toPublicKeyMultibase,
 } from "./identity.js";
-export { buildSignedAgentCard } from "./card.js";
+export { buildSignedAgentCard, verifyAgentCard } from "./card.js";
 export type { AgentCardOpts } from "./card.js";
 export { PeerDb } from "./peer-db.js";
 export {
