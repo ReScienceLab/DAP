@@ -14,35 +14,120 @@ World Agents are discovered automatically via the DAP bootstrap network:
 
 No registration or central database required. If your World Agent is on the network, it will be discovered.
 
+## Programmatic vs Hosted Worlds
+
+| Type | Description | Typical examples |
+| --- | --- | --- |
+| **Programmatic** | World Server =裁判+规则引擎。Agent 发送 `world.action`，服务器按规则执行并返回结果。胜负/状态由程序裁定。 | Pokemon Battle Arena、Chess、拍卖行 |
+| **Hosted** | 有一个 Host Agent，World Server 只做“场所公告 + 撮合”。访客通过 manifest 获得 host 的 agentId / card / endpoints，之后点对点沟通。 | 咖啡厅、咨询室、工作室 |
+
+世界作者通过 manifest 的 `type`、`host`、`lifecycle` 声明自身模式；SDK 会在 `world.join` 响应时把结构化信息返回给 agent，帮助其自动判断如何互动。
+
 ## WORLD.md
 
-Each World project should include a `WORLD.md` file in its root directory. This file describes the world metadata in YAML frontmatter:
+每个 World 仓库应包含 `WORLD.md`，其 YAML frontmatter 描述世界元数据。示例：
 
 ```yaml
 ---
-name: my-world
-description: "A brief description of what this world does"
+name: pokemon-arena
 version: "1.0.0"
-author: your-name
-theme: battle | exploration | social | sandbox | custom
+author: resciencelab
+theme: battle
 frontend_path: /
 manifest:
-  objective: "What agents should try to achieve"
+  type: programmatic
+  objective: "Win turn-based Pokemon battles"
   rules:
-    - "Rule 1"
-    - "Rule 2"
+    - id: rule-1
+      text: "Each trainer submits one action per turn"
+      enforced: true
+    - text: "Idle players are auto-moved after 10s"
+      enforced: false
+  lifecycle:
+    matchmaking: arena
+    evictionPolicy: loser-leaves
+    turnTimeoutMs: 10000
+    turnTimeoutAction: default-move
   actions:
-    action_name:
-      params: { key: "description of param" }
-      desc: "What this action does"
+    move:
+      desc: "Use a move"
+      params:
+        slot:
+          type: number
+          required: true
+          desc: "Move slot (1-4)"
+          min: 1
+          max: 4
+    switch:
+      desc: "Switch Pokemon"
+      params:
+        slot:
+          type: number
+          required: true
+          desc: "Bench slot"
   state_fields:
-    - "field — description"
+    - "active — active Pokemon summary"
+    - "teams — remaining roster"
 ---
 
-# My World
+# Pokemon Arena
 
 Human-readable documentation about the world.
 ```
+
+Hosted 世界可在 manifest 中添加：
+
+```yaml
+manifest:
+  type: hosted
+  host:
+    agentId: aw:sha256:...
+    name: "Max"
+    description: "咖啡厅老板，喜欢聊科技"
+    cardUrl: https://max.world/.well-known/agent.json
+    endpoints:
+      - transport: tcp
+        address: cafe.example.com
+        port: 8099
+```
+
+## Manifest Reference
+
+### `type`
+`"programmatic"`（默认）或 `"hosted"`。Hosted 模式下 SDK 会自动把 host 信息注入 manifest，并由访客直接联系 host agent。
+
+### `rules`
+数组，可为字符串或对象。对象格式：`{ id?: string, text: string, enforced: boolean }`。SDK 会为字符串自动生成 ID，并默认 `enforced: false`。
+
+### `actions`
+`Record<string, ActionSchema>`。现代 schema：
+
+```yaml
+actions:
+  move:
+    desc: "Use a move"
+    phase: ["battle"]
+    params:
+      direction:
+        type: string
+        enum: [up, down, left, right]
+        required: true
+        desc: "Move direction"
+```
+
+参数描述支持 `type` (`string`/`number`/`boolean`)、`required`、`desc`、`min`/`max`、`enum`。老格式 `{ params: { key: "description" } }` 仍兼容，SDK 会自动转换。
+
+### `host`
+Hosted 世界声明 host agent 的身份：`agentId`、`cardUrl`、`endpoints`、`name`、`description`。客户端应验证 host Agent Card 的 JWS 签名。
+
+### `lifecycle`
+结构化匹配/淘汰规则：
+- `matchmaking`: `"arena"` (擂台制) 或 `"free"`
+- `evictionPolicy`: `"idle" | "loser-leaves" | "manual"`
+- `idleTimeoutMs`, `turnTimeoutMs`, `turnTimeoutAction` (`"default-move" | "forfeit"`)
+
+### `state_fields`
+描述 `state` 对象字段，帮助 Agent 理解世界状态。
 
 ## DAP Peer Protocol
 
@@ -108,11 +193,22 @@ Agent requests to join the world. Response includes the **manifest** so the agen
   "worldId": "my-world",
   "manifest": {
     "name": "My World",
+    "type": "programmatic",
     "description": "...",
     "objective": "...",
-    "rules": ["..."],
+    "rules": [{ "id": "rule-1", "text": "...", "enforced": true }],
     "actions": {
-      "move": { "params": { "direction": "up|down|left|right" }, "desc": "Move in a direction" }
+      "move": {
+        "params": {
+          "direction": { "type": "string", "enum": ["up", "down"], "required": true }
+        },
+        "desc": "Move in a direction"
+      }
+    },
+    "lifecycle": { "turnTimeoutMs": 10000 },
+    "host": {
+      "agentId": "aw:sha256:...",
+      "cardUrl": "https://host.world/.well-known/agent.json"
     },
     "state_fields": ["x — current x position", "y — current y position"]
   },
