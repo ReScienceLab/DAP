@@ -1,12 +1,24 @@
-import Fastify from "fastify"
-import { loadOrCreateIdentity } from "./identity.js"
-import { PeerDb } from "./peer-db.js"
-import { registerPeerRoutes } from "./peer-protocol.js"
-import { startDiscovery } from "./bootstrap.js"
-import { canonicalize, signPayload, signHttpRequest } from "./crypto.js"
-import type { WorldConfig, WorldHooks, WorldServer, WorldManifest } from "./types.js"
+import Fastify from "fastify";
+import { loadOrCreateIdentity } from "./identity.js";
+import { PeerDb } from "./peer-db.js";
+import { registerPeerRoutes } from "./peer-protocol.js";
+import { startDiscovery } from "./bootstrap.js";
+import {
+  canonicalize,
+  signPayload,
+  signHttpRequest,
+  DOMAIN_SEPARATORS,
+  signWithDomainSeparator,
+} from "./crypto.js";
+import type {
+  WorldConfig,
+  WorldHooks,
+  WorldServer,
+  WorldManifest,
+} from "./types.js";
 
-const DEFAULT_BOOTSTRAP_URL = "https://resciencelab.github.io/DAP/bootstrap.json"
+const DEFAULT_BOOTSTRAP_URL =
+  "https://resciencelab.github.io/DAP/bootstrap.json";
 
 /**
  * Start a fully-wired DAP World Agent server.
@@ -46,7 +58,7 @@ export async function createWorldServer(
     cardUrl,
     cardName,
     cardDescription,
-  } = config
+  } = config;
 
   function buildManifest(manifest?: WorldManifest): WorldManifest {
     const result: WorldManifest = {
@@ -54,7 +66,7 @@ export async function createWorldServer(
       ...manifest,
       type: manifest?.type ?? worldType ?? "programmatic",
       theme: manifest?.theme ?? worldTheme,
-    }
+    };
 
     if (result.type === "hosted" && hostAgentId) {
       result.host = {
@@ -62,23 +74,25 @@ export async function createWorldServer(
         cardUrl: hostCardUrl,
         endpoints: hostEndpoints,
         ...result.host,
-      }
+      };
     }
 
-    return result
+    return result;
   }
 
-  const resolvedPublicPort = publicPort ?? port
+  const resolvedPublicPort = publicPort ?? port;
 
-  const identity = loadOrCreateIdentity(dataDir, "world-identity")
-  console.log(`[world] agentId=${identity.agentId} world=${worldId} name="${worldName}"`)
+  const identity = loadOrCreateIdentity(dataDir, "world-identity");
+  console.log(
+    `[world] agentId=${identity.agentId} world=${worldId} name="${worldName}"`
+  );
 
-  const peerDb = new PeerDb({ staleTtlMs })
+  const peerDb = new PeerDb({ staleTtlMs });
 
   // Track agents currently in world for idle eviction
-  const agentLastSeen = new Map<string, number>()
+  const agentLastSeen = new Map<string, number>();
 
-  const fastify = Fastify({ logger: false })
+  const fastify = Fastify({ logger: false });
 
   // Register peer protocol routes
   registerPeerRoutes(fastify, {
@@ -96,65 +110,86 @@ export async function createWorldServer(
       passwordRequired: password.length > 0,
     }),
     onMessage: async (agentId, event, content, sendReply) => {
-      const data = (content ?? {}) as Record<string, unknown>
+      const data = (content ?? {}) as Record<string, unknown>;
 
       switch (event) {
         case "world.join": {
           if (maxAgents > 0 && agentLastSeen.size >= maxAgents) {
-            sendReply({ error: `World is full (${maxAgents}/${maxAgents} agents)` }, 403)
-            return
+            sendReply(
+              { error: `World is full (${maxAgents}/${maxAgents} agents)` },
+              403
+            );
+            return;
           }
           if (password && data["password"] !== password) {
-            sendReply({ error: "Invalid password" }, 403)
-            return
+            sendReply({ error: "Invalid password" }, 403);
+            return;
           }
-          agentLastSeen.set(agentId, Date.now())
-          const result = await hooks.onJoin(agentId, data)
-          sendReply({ ok: true, worldId, manifest: buildManifest(result.manifest), state: result.state })
-          console.log(`[world] ${agentId.slice(0, 8)} joined — ${agentLastSeen.size} agents`)
-          return
+          agentLastSeen.set(agentId, Date.now());
+          const result = await hooks.onJoin(agentId, data);
+          sendReply({
+            ok: true,
+            worldId,
+            manifest: buildManifest(result.manifest),
+            state: result.state,
+          });
+          console.log(
+            `[world] ${agentId.slice(0, 8)} joined — ${
+              agentLastSeen.size
+            } agents`
+          );
+          return;
         }
 
         case "world.leave": {
-          const wasPresent = agentLastSeen.has(agentId)
-          agentLastSeen.delete(agentId)
+          const wasPresent = agentLastSeen.has(agentId);
+          agentLastSeen.delete(agentId);
           if (wasPresent) {
-            await hooks.onLeave(agentId)
-            console.log(`[world] ${agentId.slice(0, 8)} left — ${agentLastSeen.size} agents`)
+            await hooks.onLeave(agentId);
+            console.log(
+              `[world] ${agentId.slice(0, 8)} left — ${
+                agentLastSeen.size
+              } agents`
+            );
           }
-          sendReply({ ok: true })
-          return
+          sendReply({ ok: true });
+          return;
         }
 
         case "world.action": {
           if (!agentLastSeen.has(agentId)) {
-            sendReply({ error: "Agent not in world — join first" }, 400)
-            return
+            sendReply({ error: "Agent not in world — join first" }, 400);
+            return;
           }
-          agentLastSeen.set(agentId, Date.now())
-          const { ok, state } = await hooks.onAction(agentId, data)
-          sendReply({ ok, state })
-          return
+          agentLastSeen.set(agentId, Date.now());
+          const { ok, state } = await hooks.onAction(agentId, data);
+          sendReply({ ok, state });
+          return;
         }
 
         default:
-          sendReply({ ok: true })
+          sendReply({ ok: true });
       }
     },
-  })
+  });
 
   // Allow caller to register additional routes before listen
-  if (setupRoutes) await setupRoutes(fastify)
+  if (setupRoutes) await setupRoutes(fastify);
 
-  await fastify.listen({ port, host: "::" })
-  console.log(`[world] Listening on [::]:${port}  world=${worldId}`)
+  await fastify.listen({ port, host: "::" });
+  console.log(`[world] Listening on [::]:${port}  world=${worldId}`);
 
   // Outbound: broadcast world.state to known peers
   async function broadcastWorldState() {
-    const state = hooks.getState()
-    const snapshot = { worldId, worldName, theme: worldTheme, ...((state as object) ?? {}) }
-    const knownPeers = [...peerDb.values()].filter((p) => p.endpoints?.length)
-    if (!knownPeers.length) return
+    const state = hooks.getState();
+    const snapshot = {
+      worldId,
+      worldName,
+      theme: worldTheme,
+      ...((state as object) ?? {}),
+    };
+    const knownPeers = [...peerDb.values()].filter((p) => p.endpoints?.length);
+    if (!knownPeers.length) return;
 
     const payload: Record<string, unknown> = {
       from: identity.agentId,
@@ -162,55 +197,70 @@ export async function createWorldServer(
       event: "world.state",
       content: JSON.stringify(snapshot),
       timestamp: Date.now(),
-    }
-    payload["signature"] = signPayload(payload, identity.secretKey)
+    };
+    payload["signature"] = signWithDomainSeparator(
+      DOMAIN_SEPARATORS.WORLD_STATE,
+      payload,
+      identity.secretKey
+    );
 
     await Promise.allSettled(
       knownPeers.map(async (peer) => {
-        for (const ep of [...peer.endpoints].sort((a, b) => a.priority - b.priority)) {
+        for (const ep of [...peer.endpoints].sort(
+          (a, b) => a.priority - b.priority
+        )) {
           try {
-            const isIpv6 = ep.address.includes(":") && !ep.address.includes(".")
+            const isIpv6 =
+              ep.address.includes(":") && !ep.address.includes(".");
             const url = isIpv6
               ? `http://[${ep.address}]:${ep.port ?? 8099}/peer/message`
-              : `http://${ep.address}:${ep.port ?? 8099}/peer/message`
-            const body = JSON.stringify(canonicalize(payload))
-            const urlObj = new URL(url)
-            const awHeaders = signHttpRequest(identity, "POST", urlObj.host, "/peer/message", body)
+              : `http://${ep.address}:${ep.port ?? 8099}/peer/message`;
+            const body = JSON.stringify(canonicalize(payload));
+            const urlObj = new URL(url);
+            const awHeaders = signHttpRequest(
+              identity,
+              "POST",
+              urlObj.host,
+              "/peer/message",
+              body
+            );
             await fetch(url, {
               method: "POST",
               headers: { "Content-Type": "application/json", ...awHeaders },
               body,
               signal: AbortSignal.timeout(8_000),
-            })
-            return
-          } catch { /* try next endpoint */ }
+            });
+            return;
+          } catch {
+            /* try next endpoint */
+          }
         }
       })
-    )
+    );
   }
 
-  const broadcastTimer = setInterval(broadcastWorldState, broadcastIntervalMs)
+  const broadcastTimer = setInterval(broadcastWorldState, broadcastIntervalMs);
 
   // Idle agent eviction (5 min)
   const evictionTimer = setInterval(async () => {
-    const cutoff = Date.now() - 5 * 60 * 1000
+    const cutoff = Date.now() - 5 * 60 * 1000;
     for (const [id, ts] of agentLastSeen) {
       if (ts < cutoff) {
-        agentLastSeen.delete(id)
-        await hooks.onLeave(id).catch(() => {})
-        console.log(`[world] ${id.slice(0, 8)} evicted (idle)`)
+        agentLastSeen.delete(id);
+        await hooks.onLeave(id).catch(() => {});
+        console.log(`[world] ${id.slice(0, 8)} evicted (idle)`);
       }
     }
-  }, 60_000)
+  }, 60_000);
 
   // Stale peer pruning
   const pruneTimer = setInterval(() => {
-    const pruned = peerDb.prune()
-    if (pruned > 0) console.log(`[world] Pruned ${pruned} stale peer(s)`)
-  }, 5 * 60 * 1000)
+    const pruned = peerDb.prune();
+    if (pruned > 0) console.log(`[world] Pruned ${pruned} stale peer(s)`);
+  }, 5 * 60 * 1000);
 
   // Bootstrap discovery
-  let stopDiscovery: (() => void) | undefined
+  let stopDiscovery: (() => void) | undefined;
   if (isPublic) {
     stopDiscovery = await startDiscovery({
       identity,
@@ -221,23 +271,23 @@ export async function createWorldServer(
       peerDb,
       bootstrapUrl,
       intervalMs: discoveryIntervalMs,
-      onDiscovery: (n) => console.log(`[world] Discovery complete — ${n} peer(s)`),
-    })
-    console.log(`[world] Public mode — announcing to DAP network`)
+      onDiscovery: (n) =>
+        console.log(`[world] Discovery complete — ${n} peer(s)`),
+    });
+    console.log(`[world] Public mode — announcing to DAP network`);
   } else {
-    console.log(`[world] Private mode — skipping DAP network announce`)
+    console.log(`[world] Private mode — skipping DAP network announce`);
   }
 
   return {
     fastify,
     identity,
     async stop() {
-      clearInterval(broadcastTimer)
-      clearInterval(evictionTimer)
-      clearInterval(pruneTimer)
-      stopDiscovery?.()
-      await fastify.close()
+      clearInterval(broadcastTimer);
+      clearInterval(evictionTimer);
+      clearInterval(pruneTimer);
+      stopDiscovery?.();
+      await fastify.close();
     },
-  }
+  };
 }
-
