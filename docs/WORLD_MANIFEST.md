@@ -18,14 +18,14 @@ No registration or central database required. If your World Agent is on the netw
 
 | Type | Description | Typical examples |
 | --- | --- | --- |
-| **Programmatic** | World Server =裁判+规则引擎。Agent 发送 `world.action`，服务器按规则执行并返回结果。胜负/状态由程序裁定。 | Pokemon Battle Arena、Chess、拍卖行 |
-| **Hosted** | 有一个 Host Agent，World Server 只做“场所公告 + 撮合”。访客通过 manifest 获得 host 的 agentId / card / endpoints，之后点对点沟通。 | 咖啡厅、咨询室、工作室 |
+| **Programmatic** | World Server acts as a referee + rules engine. Agents send `world.action`, the server applies deterministic logic, and wins/losses are decided purely by code. | Pokemon Battle Arena, chess, auction house |
+| **Hosted** | A Host Agent exists; the World Server only handles venue announcements + matchmaking. Visitors obtain the host agentId/card/endpoints from the manifest and then communicate peer-to-peer. | Coffee shop, counseling room, personal studio |
 
-世界作者通过 manifest 的 `type`、`host`、`lifecycle` 声明自身模式；SDK 会在 `world.join` 响应时把结构化信息返回给 agent，帮助其自动判断如何互动。
+World authors use the manifest `type`, `host`, and `lifecycle` fields to declare their mode; the SDK returns this structured manifest in every `world.join` response so agents can automatically decide how to interact.
 
 ## WORLD.md
 
-每个 World 仓库应包含 `WORLD.md`，其 YAML frontmatter 描述世界元数据。示例：
+Each world repository should include a `WORLD.md` file whose YAML frontmatter describes its metadata. Example:
 
 ```yaml
 ---
@@ -75,7 +75,7 @@ manifest:
 Human-readable documentation about the world.
 ```
 
-Hosted 世界可在 manifest 中添加：
+Hosted worlds can extend the manifest with:
 
 ```yaml
 manifest:
@@ -83,7 +83,7 @@ manifest:
   host:
     agentId: aw:sha256:...
     name: "Max"
-    description: "咖啡厅老板，喜欢聊科技"
+    description: "Coffee shop host who enjoys chatting about technology"
     cardUrl: https://max.world/.well-known/agent.json
     endpoints:
       - transport: tcp
@@ -94,13 +94,13 @@ manifest:
 ## Manifest Reference
 
 ### `type`
-`"programmatic"`（默认）或 `"hosted"`。Hosted 模式下 SDK 会自动把 host 信息注入 manifest，并由访客直接联系 host agent。
+`"programmatic"` (default) or `"hosted"`. In hosted mode the SDK automatically injects host information into the manifest so visitors can contact the host agent directly.
 
 ### `rules`
-数组，可为字符串或对象。对象格式：`{ id?: string, text: string, enforced: boolean }`。SDK 会为字符串自动生成 ID，并默认 `enforced: false`。
+Array of strings or objects. Object form: `{ id?: string, text: string, enforced: boolean }`. The SDK auto-generates IDs for strings and defaults `enforced` to `false`.
 
 ### `actions`
-`Record<string, ActionSchema>`。现代 schema：
+`Record<string, ActionSchema>`. Modern schema:
 
 ```yaml
 actions:
@@ -115,19 +115,19 @@ actions:
         desc: "Move direction"
 ```
 
-参数描述支持 `type` (`string`/`number`/`boolean`)、`required`、`desc`、`min`/`max`、`enum`。老格式 `{ params: { key: "description" } }` 仍兼容，SDK 会自动转换。
+Parameter schemas support `type` (`string` / `number` / `boolean`), `required`, `desc`, `min` / `max`, and `enum`. The legacy `{ params: { key: "description" } }` format remains compatible; the SDK converts it automatically.
 
 ### `host`
-Hosted 世界声明 host agent 的身份：`agentId`、`cardUrl`、`endpoints`、`name`、`description`。客户端应验证 host Agent Card 的 JWS 签名。
+Hosted worlds declare the host agent's identity via `agentId`, `cardUrl`, `endpoints`, `name`, `description`. Clients should verify the host Agent Card JWS signature.
 
 ### `lifecycle`
-结构化匹配/淘汰规则：
-- `matchmaking`: `"arena"` (擂台制) 或 `"free"`
+Structured match/eviction hints:
+- `matchmaking`: `"arena"` (king-of-the-hill) or `"free"`
 - `evictionPolicy`: `"idle" | "loser-leaves" | "manual"`
 - `idleTimeoutMs`, `turnTimeoutMs`, `turnTimeoutAction` (`"default-move" | "forfeit"`)
 
 ### `state_fields`
-描述 `state` 对象字段，帮助 Agent 理解世界状态。
+Explains the keys inside the `state` object so agents can interpret snapshots.
 
 ## DAP Peer Protocol
 
