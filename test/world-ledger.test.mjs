@@ -86,7 +86,7 @@ describe("WorldLedger", () => {
     ledger1.append("world.join", "aw:sha256:a1", "Bot1")
 
     // Tamper with the file: change the alias in the second line
-    const filePath = path.join(tmpDir, "world-ledger.jsonl")
+    const filePath = path.join(tmpDir, "world-ledger-test-world.jsonl")
     const lines = fs.readFileSync(filePath, "utf8").trim().split("\n")
     const entry = JSON.parse(lines[1])
     entry.alias = "TAMPERED"
@@ -215,7 +215,7 @@ describe("WorldLedger", () => {
     assert.equal(ledger1.length, 2)
 
     // Append a corrupted line to the file
-    const filePath = path.join(tmpDir, "world-ledger.jsonl")
+    const filePath = path.join(tmpDir, "world-ledger-test-world.jsonl")
     fs.appendFileSync(filePath, '{"broken":true, invalid json\n')
 
     const ledger2 = new WorldLedger(tmpDir, "test-world", identity)

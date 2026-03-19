@@ -5,8 +5,9 @@
  *   1. QUIC/UDP transport (if available)
  *   2. HTTP over TCP (direct fallback)
  */
+import * as nacl from "tweetnacl"
 import { P2PMessage, Identity, Endpoint } from "./types"
-import { signMessage, signHttpRequest } from "./identity"
+import { signWithDomainSeparator, DOMAIN_SEPARATORS, signHttpRequest } from "./identity"
 import { Transport } from "./transport"
 
 function buildSignedMessage(identity: Identity, event: string, content: string): P2PMessage {
@@ -18,7 +19,8 @@ function buildSignedMessage(identity: Identity, event: string, content: string):
     content,
     timestamp,
   }
-  const signature = signMessage(identity.privateKey, payload as Record<string, unknown>)
+  const privFull = nacl.sign.keyPair.fromSeed(Buffer.from(identity.privateKey, "base64"))
+  const signature = signWithDomainSeparator(DOMAIN_SEPARATORS.MESSAGE, payload, privFull.secretKey)
   return { ...payload, signature }
 }
 

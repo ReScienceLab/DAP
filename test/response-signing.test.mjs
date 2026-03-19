@@ -21,7 +21,7 @@ const nacl = (await import("tweetnacl")).default
 
 const { startPeerServer, stopPeerServer } = await import("../dist/peer-server.js")
 const { initDb } = await import("../dist/peer-db.js")
-const { agentIdFromPublicKey, signMessage } = await import("../dist/identity.js")
+const { agentIdFromPublicKey, DOMAIN_SEPARATORS } = await import("../dist/identity.js")
 
 const PORT = 18110
 
@@ -63,7 +63,9 @@ function verifyResponseSig(headers, status, body, publicKeyB64) {
   const signingInput = canonicalize({ v: PROTOCOL_VERSION, from, kid, ts, status, contentDigest: cd })
   const pubBytes = Buffer.from(publicKeyB64, "base64")
   const sigBytes = Buffer.from(sig, "base64")
-  const msg = Buffer.from(JSON.stringify(signingInput))
+  const prefix = Buffer.from(DOMAIN_SEPARATORS.HTTP_RESPONSE)
+  const payload = Buffer.from(JSON.stringify(signingInput))
+  const msg = Buffer.concat([prefix, payload])
   const valid = nacl.sign.detached.verify(msg, sigBytes, pubBytes)
   return { ok: valid }
 }

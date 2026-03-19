@@ -226,17 +226,14 @@ export function signHttpRequest(
   const signingInput = buildRequestSigningInput({
     v: PROTOCOL_VERSION, from: identity.agentId, kid, ts, method, authority, path: reqPath, contentDigest,
   })
-  const sig = nacl.sign.detached(
-    Buffer.from(JSON.stringify(canonicalize(signingInput))),
-    privFull.secretKey
-  )
+  const signature = signWithDomainSeparator(DOMAIN_SEPARATORS.HTTP_REQUEST, signingInput, privFull.secretKey)
   return {
     "X-AgentWorld-Version": PROTOCOL_VERSION,
     "X-AgentWorld-From": identity.agentId,
     "X-AgentWorld-KeyId": kid,
     "X-AgentWorld-Timestamp": ts,
     "Content-Digest": contentDigest,
-    "X-AgentWorld-Signature": Buffer.from(sig).toString("base64"),
+    "X-AgentWorld-Signature": signature,
   }
 }
 
@@ -275,7 +272,7 @@ export function verifyHttpRequestHeaders(
   const signingInput = buildRequestSigningInput({
     v: ver, from, kid, ts, method, authority, path: reqPath, contentDigest: cd,
   })
-  const ok = verifySignature(publicKeyB64, signingInput, sig)
+  const ok = verifyWithDomainSeparator(DOMAIN_SEPARATORS.HTTP_REQUEST, publicKeyB64, signingInput, sig)
   return ok ? { ok: true } : { ok: false, error: "Invalid X-AgentWorld-Signature" }
 }
 
@@ -291,17 +288,14 @@ export function signHttpResponse(
   const signingInput = buildResponseSigningInput({
     v: PROTOCOL_VERSION, from: identity.agentId, kid, ts, status, contentDigest,
   })
-  const sig = nacl.sign.detached(
-    Buffer.from(JSON.stringify(canonicalize(signingInput))),
-    privFull.secretKey
-  )
+  const signature = signWithDomainSeparator(DOMAIN_SEPARATORS.HTTP_RESPONSE, signingInput, privFull.secretKey)
   return {
     "X-AgentWorld-Version": PROTOCOL_VERSION,
     "X-AgentWorld-From": identity.agentId,
     "X-AgentWorld-KeyId": kid,
     "X-AgentWorld-Timestamp": ts,
     "Content-Digest": contentDigest,
-    "X-AgentWorld-Signature": Buffer.from(sig).toString("base64"),
+    "X-AgentWorld-Signature": signature,
   }
 }
 
@@ -336,7 +330,7 @@ export function verifyHttpResponseHeaders(
   }
 
   const signingInput = buildResponseSigningInput({ v: ver, from, kid, ts, status, contentDigest: cd })
-  const ok = verifySignature(publicKeyB64, signingInput, sig)
+  const ok = verifyWithDomainSeparator(DOMAIN_SEPARATORS.HTTP_RESPONSE, publicKeyB64, signingInput, sig)
   return ok ? { ok: true } : { ok: false, error: "Invalid X-AgentWorld-Signature" }
 }
 

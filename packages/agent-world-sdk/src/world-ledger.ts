@@ -27,7 +27,8 @@ export class WorldLedger {
   public corruptedLines = 0
 
   constructor(dataDir: string, worldId: string, identity: Identity) {
-    this.filePath = path.join(dataDir, "world-ledger.jsonl")
+    const safeId = worldId.replace(/[^a-zA-Z0-9_-]/g, "_")
+    this.filePath = path.join(dataDir, `world-ledger-${safeId}.jsonl`)
     this.identity = identity
     this.worldId = worldId
     this.load()
