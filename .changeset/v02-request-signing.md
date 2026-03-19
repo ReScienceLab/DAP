@@ -1,6 +1,5 @@
 ---
 "@resciencelab/dap": minor
-"@resciencelab/agent-world-sdk": minor
 ---
 
 feat: domain-separated signing, header-only auth, world ledger

@@ -1,5 +1,5 @@
 ---
-"@resciencelab/agent-world-sdk": minor
+"@resciencelab/dap": minor
 ---
 
 Implement domain-separated signatures to prevent cross-context replay attacks
