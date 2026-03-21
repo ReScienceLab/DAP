@@ -51,6 +51,12 @@ function hasWorldCapability(capabilities) {
   return Array.isArray(capabilities) && capabilities.some(c => typeof c === "string" && c.startsWith("world:"));
 }
 
+function isRegistryOrWorld(capabilities) {
+  return Array.isArray(capabilities) && capabilities.some(c =>
+    typeof c === "string" && (c.startsWith("world:") || c === "registry")
+  );
+}
+
 // ---------------------------------------------------------------------------
 // World DB (in-memory + JSON persistence)
 // ---------------------------------------------------------------------------
@@ -188,7 +194,7 @@ server.post("/peer/announce", async (req, reply) => {
     return reply.code(400).send({ error: "Missing 'from' field" });
   }
 
-  if (!hasWorldCapability(ann.capabilities)) {
+  if (!isRegistryOrWorld(ann.capabilities)) {
     return reply.code(403).send({ error: "Only World Servers can register. Include a world:* capability." });
   }
 

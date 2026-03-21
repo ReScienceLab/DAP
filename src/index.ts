@@ -435,29 +435,29 @@ export default function register(api: any) {
         if (resp.ok) {
           const data = await resp.json() as { bootstrap_nodes?: Array<{ addr: string; httpPort?: number }> }
           const nodes = (data.bootstrap_nodes ?? []).filter((n: any) => n.addr)
-          for (const node of nodes.slice(0, 3)) {
-            try {
-              const isIpv6 = node.addr.includes(":") && !node.addr.includes(".")
-              const url = isIpv6
-                ? `http://[${node.addr}]:${node.httpPort ?? 8099}/worlds`
-                : `http://${node.addr}:${node.httpPort ?? 8099}/worlds`
-              const wr = await fetch(url, { signal: AbortSignal.timeout(10_000) })
-              if (wr.ok) {
-                const body = await wr.json() as { worlds?: any[] }
-                for (const w of body.worlds ?? []) {
-                  if (w.agentId && !registryWorlds.some(rw => rw.agentId === w.agentId)) {
-                    registryWorlds.push(w)
-                    upsertDiscoveredPeer(w.agentId, w.publicKey ?? "", {
-                      alias: w.alias,
-                      endpoints: w.endpoints,
-                      capabilities: w.capabilities,
-                      source: "gossip",
-                    })
-                  }
-                }
-                break // got results from one registry node
+          const results = await Promise.allSettled(nodes.slice(0, 5).map(async (node: any) => {
+            const isIpv6 = node.addr.includes(":") && !node.addr.includes(".")
+            const url = isIpv6
+              ? `http://[${node.addr}]:${node.httpPort ?? 8099}/worlds`
+              : `http://${node.addr}:${node.httpPort ?? 8099}/worlds`
+            const wr = await fetch(url, { signal: AbortSignal.timeout(10_000) })
+            if (!wr.ok) return []
+            const body = await wr.json() as { worlds?: any[] }
+            return body.worlds ?? []
+          }))
+          for (const r of results) {
+            if (r.status !== "fulfilled") continue
+            for (const w of r.value as any[]) {
+              if (w.agentId && !registryWorlds.some(rw => rw.agentId === w.agentId)) {
+                registryWorlds.push(w)
+                upsertDiscoveredPeer(w.agentId, w.publicKey ?? "", {
+                  alias: w.alias,
+                  endpoints: w.endpoints,
+                  capabilities: w.capabilities,
+                  source: "gossip",
+                })
               }
-            } catch { /* try next node */ }
+            }
           }
         }
       } catch { /* registry unreachable */ }
