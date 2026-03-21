@@ -47,6 +47,21 @@ function verifySignature(publicKeyB64, obj, signatureB64) {
   }
 }
 
+function verifyDomainSeparatedSignature(domainSeparator, publicKeyB64, obj, signatureB64) {
+  try {
+    const pubKey = Buffer.from(publicKeyB64, "base64");
+    const sig = Buffer.from(signatureB64, "base64");
+    const prefix = Buffer.from(domainSeparator, "utf8");
+    const payload = Buffer.from(JSON.stringify(canonicalize(obj)));
+    const msg = Buffer.concat([prefix, payload]);
+    return nacl.sign.detached.verify(msg, sig, pubKey);
+  } catch {
+    return false;
+  }
+}
+
+const ANNOUNCE_SEPARATOR_PREFIX = "AgentWorld-Announce-";
+
 function hasWorldCapability(capabilities) {
   return Array.isArray(capabilities) && capabilities.some(c => typeof c === "string" && c.startsWith("world:"));
 }
@@ -88,6 +103,12 @@ function saveWorlds() {
 function upsertWorld(agentId, publicKey, opts = {}) {
   const now = Date.now();
   const existing = worlds.get(agentId);
+  let lastSeen;
+  if (opts.lastSeen !== undefined) {
+    lastSeen = Math.max(existing?.lastSeen ?? 0, opts.lastSeen);
+  } else {
+    lastSeen = now;
+  }
   worlds.set(agentId, {
     agentId,
     publicKey,
@@ -96,7 +117,7 @@ function upsertWorld(agentId, publicKey, opts = {}) {
     endpoints: opts.endpoints ?? existing?.endpoints ?? [],
     capabilities: opts.capabilities ?? existing?.capabilities ?? [],
     firstSeen: existing?.firstSeen ?? now,
-    lastSeen: now,
+    lastSeen,
   });
   if (worlds.size > MAX_WORLDS) {
     const sorted = [...worlds.values()].sort((a, b) => a.lastSeen - b.lastSeen);
@@ -199,7 +220,13 @@ server.post("/peer/announce", async (req, reply) => {
   }
 
   const { signature, ...signable } = ann;
-  if (!verifySignature(ann.publicKey, signable, signature)) {
+  // Try domain-separated ANNOUNCE verification (SDK sends these), then raw fallback
+  let sigValid = false;
+  const version = (ann.version ?? "0.5").split(".").slice(0, 2).join(".");
+  const announceSep = `${ANNOUNCE_SEPARATOR_PREFIX}${version}\0`;
+  sigValid = verifyDomainSeparatedSignature(announceSep, ann.publicKey, signable, signature);
+  if (!sigValid) sigValid = verifySignature(ann.publicKey, signable, signature);
+  if (!sigValid) {
     return reply.code(403).send({ error: "Invalid Ed25519 signature" });
   }
 

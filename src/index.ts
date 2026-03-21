@@ -69,6 +69,38 @@ let _agentMeta: { name?: string; version?: string; endpoints?: Endpoint[] } = {}
 let _transportManager: TransportManager | null = null
 let _quicTransport: UDPTransport | null = null
 
+// Track joined worlds for periodic member refresh
+const _joinedWorlds = new Map<string, { agentId: string; address: string; port: number }>()
+let _memberRefreshTimer: ReturnType<typeof setInterval> | null = null
+const MEMBER_REFRESH_INTERVAL_MS = 30_000
+
+async function refreshWorldMembers(): Promise<void> {
+  if (!identity) return
+  for (const [worldId, info] of _joinedWorlds) {
+    try {
+      const { signHttpRequest } = require("./identity")
+      const isIpv6 = info.address.includes(":") && !info.address.includes(".")
+      const host = isIpv6 ? `[${info.address}]:${info.port}` : `${info.address}:${info.port}`
+      const url = `http://${host}/world/members`
+      const awHeaders = signHttpRequest(identity!, "GET", host, "/world/members", "")
+      const resp = await fetch(url, {
+        headers: { ...awHeaders },
+        signal: AbortSignal.timeout(10_000),
+      })
+      if (!resp.ok) continue
+      const body = await resp.json() as { members?: Array<{ agentId: string; alias?: string; endpoints?: Endpoint[] }> }
+      for (const member of body.members ?? []) {
+        if (member.agentId === identity!.agentId) continue
+        upsertDiscoveredPeer(member.agentId, "", {
+          alias: member.alias,
+          endpoints: member.endpoints,
+          source: "gossip",
+        })
+      }
+    } catch { /* world unreachable — skip */ }
+  }
+}
+
 function buildSendOpts(peerIdOrAddr?: string): SendOptions {
   const peer = peerIdOrAddr ? getPeer(peerIdOrAddr) : null
   return {
@@ -162,6 +194,11 @@ export default function register(api: any) {
     },
 
     stop: async () => {
+      if (_memberRefreshTimer) {
+        clearInterval(_memberRefreshTimer)
+        _memberRefreshTimer = null
+      }
+      _joinedWorlds.clear()
       if (identity) {
         await broadcastLeave(identity, listPeers(), peerPort, buildSendOpts())
       }
@@ -557,9 +594,16 @@ export default function register(api: any) {
         }
       }
 
-      const worldId = result.data?.worldId ?? params.world_id ?? params.address
+      const worldId = (result.data?.worldId ?? params.world_id ?? params.address) as string
       const members = result.data?.members as unknown[] | undefined
       const memberCount = members?.length ?? 0
+
+      // Track this world for periodic member refresh
+      _joinedWorlds.set(worldId, { agentId: worldAgentId!, address: targetAddr, port: targetPort })
+      if (!_memberRefreshTimer) {
+        _memberRefreshTimer = setInterval(refreshWorldMembers, MEMBER_REFRESH_INTERVAL_MS)
+      }
+
       return { content: [{ type: "text", text: `Joined world '${worldId}' — ${memberCount} other member(s) discovered` }] }
     },
   })
