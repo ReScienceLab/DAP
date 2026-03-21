@@ -1,0 +1,17 @@
+# Ralph Progress Log
+
+## Codebase Patterns
+- In `gateway/server.mjs`, keep peer-protocol response payloads backward compatible even when internal registry helpers are renamed; `/peer/peers` and `/peer/announce` still emit `peers`.
+
+(Add reusable patterns discovered during implementation here)
+
+---
+
+## 2026-03-21 16:51:53 UTC - US-001
+- Renamed the gateway's internal peer-tracking symbols to registry/agent terminology in `gateway/server.mjs` without changing endpoint behavior outside the `/health` field rename.
+- Files changed: `gateway/server.mjs`, `.hal/prd.json`, `.hal/progress.txt`
+- **Learnings for future iterations:**
+  - `gateway/server.mjs` still exposes peer-protocol compatibility fields like `peers` on `/peer/peers` and `/peer/announce`; internal naming can diverge from wire naming.
+  - The gateway hardening work is currently isolated to `gateway/server.mjs`; no build step or extra files are needed for gateway-specific runtime changes.
+  - Follow the repo verification order literally: run `npm run build` before `node --test test/*.test.mjs` because tests import from `dist/`.
+---

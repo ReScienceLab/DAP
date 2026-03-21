@@ -7,8 +7,8 @@
  *
  * HTTP Endpoints:
  *   GET  /health          — health check
- *   GET  /worlds          — list discovered world:* peers on AWN network
- *   GET  /agents          — list all known AWN peers
+ *   GET  /worlds          — list discovered world:* agents on AWN network
+ *   GET  /agents          — list all known AWN agents
  *   GET  /world/:worldId  — info about a specific world
  *
  * WebSocket:
@@ -48,7 +48,7 @@ const PUBLIC_ADDR = process.env.PUBLIC_ADDR ?? null;
 const PUBLIC_URL = process.env.PUBLIC_URL ?? null; // e.g. https://gateway.example.com
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
 const STALE_TTL_MS = parseInt(process.env.STALE_TTL_MS ?? String(30 * 60 * 1000)); // 30 min
-const MAX_PEERS = 500;
+const MAX_AGENTS = 500;
 
 // ---------------------------------------------------------------------------
 // Identity (loaded via agent-world-sdk)
@@ -61,19 +61,19 @@ const selfAgentId = identity.agentId;
 console.log(`[gateway] agentId=${selfAgentId}`);
 
 // ---------------------------------------------------------------------------
-// Peer DB
+// Registry
 // ---------------------------------------------------------------------------
-const peers = new Map(); // agentId -> PeerRecord
+const registry = new Map(); // agentId -> PeerRecord
 
-function upsertPeer(agentId, publicKey, opts = {}) {
+function upsertAgent(agentId, publicKey, opts = {}) {
   const now = Date.now();
-  const existing = peers.get(agentId);
-  // For gossipped peers, preserve the original lastSeen from the sender
+  const existing = registry.get(agentId);
+  // For gossipped agents, preserve the original lastSeen from the sender
   // Only use Date.now() for direct contacts (no lastSeen provided)
   const lastSeen = opts.lastSeen
     ? Math.max(existing?.lastSeen ?? 0, opts.lastSeen)
     : now;
-  peers.set(agentId, {
+  registry.set(agentId, {
     agentId,
     publicKey: publicKey || existing?.publicKey || "",
     alias: opts.alias ?? existing?.alias ?? "",
@@ -81,23 +81,23 @@ function upsertPeer(agentId, publicKey, opts = {}) {
     capabilities: opts.capabilities ?? existing?.capabilities ?? [],
     lastSeen,
   });
-  if (peers.size > MAX_PEERS) {
-    const oldest = [...peers.values()].sort((a, b) => a.lastSeen - b.lastSeen)[0];
-    peers.delete(oldest.agentId);
+  if (registry.size > MAX_AGENTS) {
+    const oldest = [...registry.values()].sort((a, b) => a.lastSeen - b.lastSeen)[0];
+    registry.delete(oldest.agentId);
   }
 }
 
-function pruneStale(ttl = STALE_TTL_MS) {
+function pruneStaleAgents(ttl = STALE_TTL_MS) {
   const cutoff = Date.now() - ttl;
   let pruned = 0;
-  for (const [id, p] of peers) {
-    if (p.lastSeen < cutoff) { peers.delete(id); pruned++; }
+  for (const [id, p] of registry) {
+    if (p.lastSeen < cutoff) { registry.delete(id); pruned++; }
   }
-  if (pruned > 0) console.log(`[gateway] Pruned ${pruned} stale peer(s) (TTL ${Math.round(ttl / 60000)}min)`);
+  if (pruned > 0) console.log(`[gateway] Pruned ${pruned} stale agent(s) (TTL ${Math.round(ttl / 60000)}min)`);
 }
 
-function getPeersForExchange(limit = 50) {
-  return [...peers.values()]
+function getAgentsForExchange(limit = 50) {
+  return [...registry.values()]
     .sort((a, b) => b.lastSeen - a.lastSeen)
     .slice(0, limit)
     .map(({ agentId, publicKey, alias, endpoints, capabilities, lastSeen }) => ({
@@ -107,7 +107,7 @@ function getPeersForExchange(limit = 50) {
 
 function findByCapability(cap) {
   const isPrefix = cap.endsWith(":");
-  return [...peers.values()].filter((p) =>
+  return [...registry.values()].filter((p) =>
     p.capabilities?.some((c) => isPrefix ? c.startsWith(cap) : c === cap)
   ).sort((a, b) => b.lastSeen - a.lastSeen);
 }
@@ -198,7 +198,7 @@ async function startPeerListener() {
   });
 
   peerServer.get("/peer/ping", async () => ({ ok: true, ts: Date.now(), role: "gateway" }));
-  peerServer.get("/peer/peers", async () => ({ peers: getPeersForExchange() }));
+  peerServer.get("/peer/peers", async () => ({ peers: getAgentsForExchange() }));
 
   peerServer.post("/peer/announce", async (req, reply) => {
     const ann = req.body;
@@ -221,10 +221,10 @@ async function startPeerListener() {
     if (agentIdFromPublicKey(ann.publicKey) !== ann.from) {
       return reply.code(400).send({ error: "agentId mismatch" });
     }
-    upsertPeer(ann.from, ann.publicKey, {
+    upsertAgent(ann.from, ann.publicKey, {
       alias: ann.alias, endpoints: ann.endpoints, capabilities: ann.capabilities,
     });
-    return { ok: true, peers: getPeersForExchange(20) };
+    return { ok: true, peers: getAgentsForExchange(20) };
   });
 
   peerServer.post("/peer/message", async (req, reply) => {
@@ -251,7 +251,7 @@ async function startPeerListener() {
       if (worldId) broadcast(worldId, { type: "world.state", ...state });
     }
 
-    upsertPeer(msg.from, msg.publicKey, {});
+    upsertAgent(msg.from, msg.publicKey, {});
     return { ok: true };
   });
 
@@ -269,7 +269,7 @@ await app.register(websocketPlugin);
 
 app.get("/health", async () => ({
   ok: true, ts: Date.now(), agentId: selfAgentId,
-  peers: peers.size, worlds: findByCapability("world:").length,
+  agents: registry.size, worlds: findByCapability("world:").length,
 }));
 
 // Agent Card — served as canonical JSON so bytes on wire match the JWS signature
@@ -290,7 +290,7 @@ app.get("/.well-known/agent.json", async (_req, reply) => {
 });
 
 app.get("/agents", async () => ({
-  agents: getPeersForExchange(100),
+  agents: getAgentsForExchange(100),
 }));
 
 app.get("/worlds", async () => {
@@ -398,5 +398,5 @@ await startPeerListener();
 await app.listen({ port: HTTP_PORT, host: "::" });
 console.log(`[gateway] Public HTTP on [::]:${HTTP_PORT}`);
 
-// Prune stale peers every 5 minutes
-setInterval(() => pruneStale(), 5 * 60 * 1000);
+// Prune stale agents every 5 minutes
+setInterval(() => pruneStaleAgents(), 5 * 60 * 1000);
