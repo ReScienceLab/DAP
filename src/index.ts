@@ -612,40 +612,30 @@ export default function register(api: any) {
     description: "List available Agent worlds from the World Registry and local cache.",
     parameters: { type: "object", properties: {}, required: [] },
     async execute(_id: string, _params: Record<string, never>) {
-      // Fetch from registry
+      // Fetch from Gateway
       let registryWorlds: Array<{ agentId: string; alias?: string; endpoints?: Endpoint[]; capabilities?: string[]; lastSeen: number }> = []
       try {
-        const registryUrl = "https://resciencelab.github.io/agent-world-network/bootstrap.json"
-        const resp = await fetch(registryUrl, { signal: AbortSignal.timeout(10_000) })
+        const gatewayUrl = process.env.GATEWAY_URL ?? "http://localhost:8100"
+        const resp = await fetch(`${gatewayUrl.replace(/\/+$/, "")}/worlds`, { signal: AbortSignal.timeout(10_000) })
         if (resp.ok) {
-          const data = await resp.json() as { bootstrap_nodes?: Array<{ addr: string; httpPort?: number }> }
-          const nodes = (data.bootstrap_nodes ?? []).filter((n: any) => n.addr)
-          const results = await Promise.allSettled(nodes.slice(0, 5).map(async (node: any) => {
-            const isIpv6 = node.addr.includes(":") && !node.addr.includes(".")
-            const url = isIpv6
-              ? `http://[${node.addr}]:${node.httpPort ?? 8099}/worlds`
-              : `http://${node.addr}:${node.httpPort ?? 8099}/worlds`
-            const wr = await fetch(url, { signal: AbortSignal.timeout(10_000) })
-            if (!wr.ok) return []
-            const body = await wr.json() as { worlds?: any[] }
-            return body.worlds ?? []
-          }))
-          for (const r of results) {
-            if (r.status !== "fulfilled") continue
-            for (const w of r.value as any[]) {
-              if (w.agentId && !registryWorlds.some(rw => rw.agentId === w.agentId)) {
-                registryWorlds.push(w)
-                upsertDiscoveredPeer(w.agentId, w.publicKey ?? "", {
-                  alias: w.alias,
-                  endpoints: w.endpoints,
-                  capabilities: w.capabilities,
-                  source: "gossip",
-                })
-              }
+          const data = await resp.json() as { worlds?: Array<{ worldId: string; agentId: string; name?: string; lastSeen?: number }> }
+          for (const w of data.worlds ?? []) {
+            if (w.agentId && !registryWorlds.some(rw => rw.agentId === w.agentId)) {
+              registryWorlds.push({
+                agentId: w.agentId,
+                alias: w.name,
+                capabilities: [`world:${w.worldId}`],
+                lastSeen: w.lastSeen ?? Date.now(),
+              })
+              upsertDiscoveredPeer(w.agentId, "", {
+                alias: w.name,
+                capabilities: [`world:${w.worldId}`],
+                source: "gateway",
+              })
             }
           }
         }
-      } catch { /* registry unreachable */ }
+      } catch { /* gateway unreachable */ }
 
       // Merge with local cache
       const localWorlds = findPeersByCapability("world:")
