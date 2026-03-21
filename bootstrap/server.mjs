@@ -14,6 +14,11 @@ import nacl from "tweetnacl";
 import fs from "fs";
 import path from "path";
 import crypto from "node:crypto";
+import { createRequire } from "node:module";
+
+const __require = createRequire(import.meta.url);
+const pkgVersion = __require("../package.json").version;
+const PROTOCOL_VERSION = pkgVersion.split(".").slice(0, 2).join(".");
 
 const PORT = parseInt(process.env.PEER_PORT ?? "8099");
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
@@ -75,7 +80,7 @@ function isRegistryOrWorld(capabilities) {
 function normalizeSharedWorldRecord(record) {
   if (!record || typeof record !== "object") return null;
   if (typeof record.publicKey !== "string" || record.publicKey.length === 0) return null;
-  if (!hasWorldCapability(record.capabilities)) return null;
+  if (!isRegistryOrWorld(record.capabilities)) return null;
 
   const derivedId = agentIdFromPublicKey(record.publicKey);
   if (record.agentId && record.agentId !== derivedId) return null;
@@ -102,7 +107,8 @@ function loadWorlds() {
   try {
     const records = JSON.parse(fs.readFileSync(file, "utf8"));
     for (const r of records) {
-      if (r.agentId) worlds.set(r.agentId, r);
+      const validated = normalizeSharedWorldRecord(r);
+      if (validated) worlds.set(validated.agentId, validated);
     }
     console.log(`[registry] Loaded ${worlds.size} world(s) from disk`);
   } catch (e) {
@@ -179,6 +185,11 @@ function getWorldsForExchange(limit = 50) {
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const idFile = path.join(DATA_DIR, "registry-identity.json");
+const legacyIdFile = path.join(DATA_DIR, "bootstrap-identity.json");
+if (!fs.existsSync(idFile) && fs.existsSync(legacyIdFile)) {
+  fs.renameSync(legacyIdFile, idFile);
+  console.log("[registry] Migrated bootstrap-identity.json → registry-identity.json");
+}
 let selfKeypair;
 if (fs.existsSync(idFile)) {
   const saved = JSON.parse(fs.readFileSync(idFile, "utf8"));
@@ -235,6 +246,10 @@ server.post("/peer/announce", async (req, reply) => {
     return reply.code(400).send({ error: "Missing 'from' field" });
   }
 
+  if (typeof ann.publicKey !== "string" || ann.publicKey.length === 0) {
+    return reply.code(400).send({ error: "Missing 'publicKey' field" });
+  }
+
   if (!isRegistryOrWorld(ann.capabilities)) {
     return reply.code(403).send({ error: "Only World Servers can register. Include a world:* capability." });
   }
@@ -242,7 +257,7 @@ server.post("/peer/announce", async (req, reply) => {
   const { signature, ...signable } = ann;
   // Verify against registry-supported protocol separators; ann.version is payload metadata only.
   let sigValid = false;
-  for (const announceSep of ["AgentWorld-Announce-0.5\0"]) {
+  for (const announceSep of [ANNOUNCE_SEPARATOR_PREFIX + PROTOCOL_VERSION + "\0"]) {
     if (verifyDomainSeparatedSignature(announceSep, ann.publicKey, signable, signature)) {
       sigValid = true;
       break;
@@ -254,6 +269,10 @@ server.post("/peer/announce", async (req, reply) => {
   }
 
   const derivedId = agentIdFromPublicKey(ann.publicKey);
+
+  if (senderId !== derivedId) {
+    return reply.code(400).send({ error: "from field does not match publicKey-derived agentId" });
+  }
 
   upsertWorld(derivedId, ann.publicKey, {
     alias: ann.alias,
@@ -326,8 +345,9 @@ async function syncWithSiblings() {
     capabilities: ["registry"],
     peers: myWorlds,
   };
+  const domainSep = ANNOUNCE_SEPARATOR_PREFIX + PROTOCOL_VERSION + "\0";
   const sig = nacl.sign.detached(
-    Buffer.from(JSON.stringify(canonicalize(signable))),
+    Buffer.concat([Buffer.from(domainSep, "utf8"), Buffer.from(JSON.stringify(canonicalize(signable)))]),
     selfKeypair.secretKey
   );
   const announcement = { ...signable, signature: Buffer.from(sig).toString("base64") };

@@ -32,5 +32,8 @@
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "core@factory-plugins": true
   }
 }
