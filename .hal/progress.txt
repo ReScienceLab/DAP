@@ -158,3 +158,12 @@
   - The safe insertion point for the new binding check is immediately after multibase decoding and the existing old-key `agentIdFromPublicKey(oldPublicKeyB64)` validation, before signature verification can flow into `peerDb.upsert(agentId, newPublicKeyB64, {})`.
   - `agentIdFromPublicKey()` in `packages/agent-world-sdk/src/crypto.ts` is already the source-of-truth derivation helper used by the SDK route, so future stories should reuse it for the new-key binding check.
 ---
+## 2026-03-22 14:15:50 UTC - T-002
+- Confirmed that `agentIdFromPublicKey()` in `packages/agent-world-sdk/src/crypto.ts` is the existing public-key-to-agent derivation helper and that `packages/agent-world-sdk/src/peer-protocol.ts` already imports it in the authoritative `/peer/key-rotation` path.
+- Updated `.hal/auto-prd.json` so the next implementation story can reuse that helper directly for `newPublicKey` binding validation without introducing duplicate derivation logic.
+- Files changed: `.hal/auto-prd.json`, `.hal/progress.txt`
+- **Learnings for future iterations:**
+  - The key-rotation fix should continue to reuse the existing `agentIdFromPublicKey()` import in `peer-protocol.ts` instead of adding a parallel helper near the route.
+  - The next story's concrete validation call is `agentIdFromPublicKey(newPublicKeyB64)` in the `/peer/key-rotation` handler after multibase decoding and before any state mutation.
+  - No `AGENTS.md` update was needed in this iteration because the reusable helper guidance was already documented at the root.
+---

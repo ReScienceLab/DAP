@@ -26,8 +26,8 @@
         "Typecheck passes"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "The existing source-of-truth helper is `agentIdFromPublicKey()` in `packages/agent-world-sdk/src/crypto.ts`. The authoritative `/peer/key-rotation` handler in `packages/agent-world-sdk/src/peer-protocol.ts` already imports that helper, so the upcoming new-key binding validation should call `agentIdFromPublicKey(newPublicKeyB64)` in that handler immediately after multibase decoding and before any path can reach `peerDb.upsert(agentId, newPublicKeyB64, {})`."
     },
     {
       "id": "T-003",
