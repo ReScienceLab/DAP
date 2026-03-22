@@ -1,5 +1,96 @@
 # Changelog
 
+## 1.0.0
+
+### Major Changes
+
+- 041b465: refactor!: remove bootstrap nodes — Gateway absorbs registry
+
+  World Servers now announce directly to the Gateway via GATEWAY_URL,
+  eliminating the standalone bootstrap/registry layer. The Gateway's
+  existing peer infrastructure (/peer/announce, peer DB, /worlds) handles
+  all world discovery.
+
+  BREAKING CHANGE: The `bootstrapUrl` and `discoveryIntervalMs` config
+  fields are replaced by `gatewayUrls` and `announceIntervalMs`. World
+  Servers must set GATEWAY_URL instead of BOOTSTRAP_URL. The bootstrap/
+  directory, docs/bootstrap.json, and bootstrap-health workflow are removed.
+
+### Minor Changes
+
+- 041b465: feat: Gateway persistence, graceful shutdown, and health observability
+
+  - Rename internal peers → registry terminology for clarity
+  - Persist world registry to $DATA_DIR/registry.json with atomic writes
+  - Wire persistence into announce and prune flows for restart recovery
+  - Stop /peer/message from polluting registry with empty records
+  - Add graceful shutdown (SIGTERM/SIGINT) that flushes registry state
+  - Enhance /health with registryAge, status (ready/warming/empty)
+
+- c3a1701: feat!: transport-layer enforcement of world-scoped isolation
+
+  All incoming peer messages are now verified at the transport layer before
+  reaching application logic:
+
+  - Messages without a worldId are rejected (403)
+  - Messages with a worldId that doesn't match any joined world are rejected
+  - Only co-members of a shared world can exchange messages
+  - Added address.ts with parseHostPort() and parseDirectPeerAddress() utilities
+  - Transport enforcement tests validate all rejection scenarios
+
+  BREAKING CHANGE: Peers that are not co-members of a shared world can no
+  longer send messages to each other. All messages must include a valid worldId.
+
+- b74f700: feat: convert bootstrap nodes to World Registry
+
+  Bootstrap nodes now function as a World Registry — they only accept and serve
+  World Server registrations (peers with world:\* capabilities). Individual agent
+  announcements are rejected with 403.
+
+  - Bootstrap server rewritten as World Registry (only world:\* announces accepted)
+  - New GET /worlds endpoint returns registered worlds
+  - list_worlds queries registry nodes to discover available worlds
+  - Removed peer-discovery.ts (global peer gossip no longer used)
+  - World Servers auto-register on startup via existing startDiscovery() flow
+  - Sibling sync between registry nodes preserved (world entries only)
+
+- b74f700: feat!: world-scoped agent isolation — remove global peer gossip
+
+  Agents are no longer visible to each other via bootstrap gossip. Peer discovery
+  happens exclusively through World membership:
+
+  - Remove bootstrap peer discovery (bootstrapDiscovery, startDiscoveryLoop, stopDiscoveryLoop)
+  - Remove p2p_add_peer and p2p_discover tools
+  - World Server returns `members` (agentId + alias + endpoints) in world.join response
+  - Add `/world/members` authenticated endpoint (requires X-AgentWorld-From header of active member)
+  - join_world accepts direct `address` parameter for connecting to worlds by URL
+  - sendP2PMessage now returns response body data for join_world to extract member list
+  - Agent endpoints are transmitted in join payload and stored server-side
+  - Eviction cleans up agent endpoint tracking
+
+  BREAKING CHANGE: Agents must join a World to discover and communicate with other agents.
+  Bootstrap nodes no longer exchange individual agent information.
+
+### Patch Changes
+
+- c3a1701: fix: replace IPv6/STUN with ADVERTISE_ADDRESS + Codex P1 fixes
+
+  Endpoint advertisement:
+
+  - Removed unreliable IPv6 NIC scanning (getPublicIPv6, getActualIpv6, isGlobalUnicastIPv6)
+  - Removed incomplete STUN NAT traversal from QUIC transport
+  - Added ADVERTISE_ADDRESS / ADVERTISE_PORT env vars and plugin config for explicit endpoint advertisement
+  - QUIC transport disabled without ADVERTISE_ADDRESS (no unusable loopback endpoints)
+
+  Codex review P1 fixes:
+
+  - Fixed bootstrap package.json resolution for Docker (use ./package.json not ../)
+  - Added setWorldMembers() to revoke co-member access when membership shrinks
+  - Verify X-AgentWorld-\* response signatures on /world/members before trusting member list
+  - /peer/ping returns publicKey for join_world identity verification
+
+- fbec06f: Update repository banner to Agent World Network design
+
 ## 0.5.0
 
 ### Minor Changes
