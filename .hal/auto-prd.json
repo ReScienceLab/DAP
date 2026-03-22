@@ -113,8 +113,8 @@
         "Typecheck passes"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Extended `test/key-rotation-sdk.test.mjs` with direct SDK `fastify.inject()` coverage for the callback-based `/peer/message` path. The new regressions submit signed message-domain payloads to `registerPeerRoutes()` and verify both the happy-path callback body and a custom `422` error reply, keeping the scope limited to the explicit reply-return behavior."
     },
     {
       "id": "T-009",

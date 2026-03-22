@@ -6,6 +6,7 @@
 - In `packages/agent-world-sdk/src/world-ledger.ts`, define `LEDGER_SEPARATOR` directly as ``AgentWorld-Ledger-${PROTOCOL_VERSION}\0`` from `./version.js` instead of deriving it from `DOMAIN_SEPARATORS.MESSAGE`.
 - For private SDK constants that are not exported, prefer a root `node:test` regression against the built `packages/agent-world-sdk/dist` artifact plus a narrow runtime verification instead of widening the public API only for tests.
 - For direct SDK handler regressions that the integrated HTTP suites do not hit, prefer a root `node:test` file that imports built `packages/agent-world-sdk/dist` entrypoints and exercises `registerPeerRoutes()` with `fastify.inject()` instead of starting a network listener.
+- For direct SDK `/peer/message` route regressions, use a body-signed `DOMAIN_SEPARATORS.MESSAGE` payload with `fastify.inject()` to reach the callback branch without depending on HTTP header-signing or a live listener.
 - In `packages/agent-world-sdk/src/peer-protocol.ts`, callback-style `reply.send(...)` branches inside `registerPeerRoutes()` should explicitly `return reply.send(...)` so custom responders do not leave the async handler control flow ambiguous.
 - For deterministic identity-helper regressions in this branch, use `nacl.sign.keyPair.fromSeed(Buffer.alloc(32, 1))`; its public key is `iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=` and it maps to stable literals for both `deriveDidKey()` and `toPublicKeyMultibase()`.
 - For Base58 zero-boundary fixes in this repo, both codec halves need explicit all-zero handling: the encoder must not append the synthetic zero digit after leading `1`s, and the decoder must not retain the synthetic accumulator byte for all-leading-`1` inputs.
@@ -30,6 +31,17 @@
 
 (Add reusable patterns discovered during implementation here)
 
+---
+## 2026-03-22 15:20:29 UTC - T-008
+- Added focused direct-SDK regressions for the callback-based `/peer/message` route in `test/key-rotation-sdk.test.mjs`, covering both a successful custom reply body and a custom `422` error reply.
+- Reused `registerPeerRoutes()` with `fastify.inject()` and a body-signed message-domain payload so the tests hit the callback branch without starting a listener.
+- Verified the story with `npm run build`, `npm --prefix packages/agent-world-sdk run build`, and `node --test test/*.test.mjs`; the full suite passed with 181 tests and 0 failures.
+- Files changed: `test/key-rotation-sdk.test.mjs`, `.hal/auto-prd.json`, `.hal/progress.txt`
+- **Learnings for future iterations:**
+  - The cleanest callback-path regression here is a direct SDK test that injects a body-signed `/peer/message` payload into `registerPeerRoutes()` rather than going through the plugin server.
+  - Covering both a default `200` callback reply and a custom non-2xx callback reply is enough to pin the control-flow contract without broadening unrelated message validation coverage.
+  - No `AGENTS.md` update was needed because the general `fastify.inject()` pattern for direct SDK handler regressions was already documented.
+---
 ---
 ## 2026-03-22 15:43:04 UTC - T-006
 - Added `test/world-ledger-separator.test.mjs`, a focused root regression that reads `packages/agent-world-sdk/dist/world-ledger.js` to assert the exact `LEDGER_SEPARATOR` declaration and verifies a real ledger signature with ``AgentWorld-Ledger-${PROTOCOL_VERSION}\0``.
