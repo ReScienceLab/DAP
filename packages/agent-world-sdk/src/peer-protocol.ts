@@ -281,6 +281,12 @@ export function registerPeerRoutes(
         .code(400)
         .send({ error: "agentId does not match oldPublicKey" });
     }
+    const expectedNewAgentId = agentIdFromPublicKey(newPublicKeyB64);
+    if (expectedNewAgentId !== rot.newAgentId) {
+      return reply
+        .code(400)
+        .send({ error: "newAgentId does not match newPublicKey" });
+    }
 
     const MAX_AGE_MS = 5 * 60 * 1000;
     if (timestamp && Math.abs(Date.now() - timestamp) > MAX_AGE_MS) {

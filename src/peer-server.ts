@@ -235,6 +235,10 @@ export async function startPeerServer(port: number = 8099, opts?: PeerServerOpti
     if (agentIdFromPublicKey(oldPublicKeyB64) !== agentId) {
       return reply.code(400).send({ error: "agentId does not match oldPublicKey" })
     }
+    const expectedNewAgentId = agentIdFromPublicKey(newPublicKeyB64)
+    if (expectedNewAgentId !== rot.newAgentId) {
+      return reply.code(400).send({ error: "newAgentId does not match newPublicKey" })
+    }
 
     if (timestamp && Math.abs(Date.now() - timestamp) > MAX_MESSAGE_AGE_MS) {
       return reply.code(400).send({ error: "Key rotation timestamp too old or too far in the future" })
