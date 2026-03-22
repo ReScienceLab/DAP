@@ -101,6 +101,9 @@ All runtime config is in `openclaw.json` under `plugins.entries.awn.config`:
 - In `packages/agent-world-sdk/src/world-ledger.ts`, keep `LEDGER_SEPARATOR` defined directly as ``AgentWorld-Ledger-${PROTOCOL_VERSION}\0`` by importing `PROTOCOL_VERSION` from `./version.js`; do not derive it indirectly from `DOMAIN_SEPARATORS.MESSAGE`.
 - For regressions around private SDK constants like `LEDGER_SEPARATOR`, prefer a root `node:test` file that reads the built `packages/agent-world-sdk/dist` artifact and pairs that with a narrow runtime signature check, rather than exporting the constant only for test access.
 
+### SDK Peer Protocol
+- In `packages/agent-world-sdk/src/peer-protocol.ts`, callback-style reply handlers inside `registerPeerRoutes()` should explicitly `return reply.send(...)` once they take over the response so the async Fastify handler has an unambiguous terminal path.
+
 ### World Server Membership
 - In `packages/agent-world-sdk/src/world-server.ts`, joined-world membership is tracked by `agentLastSeen` and `agentEndpoints`; `getMembers()` already treats active members as the intersection of those maps.
 - `peerDb` is broader discovery state and may include known peers outside the active world membership, so broadcast recipient selection should not use `peerDb` as the source of truth for world-state delivery.

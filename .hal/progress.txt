@@ -6,6 +6,7 @@
 - In `packages/agent-world-sdk/src/world-ledger.ts`, define `LEDGER_SEPARATOR` directly as ``AgentWorld-Ledger-${PROTOCOL_VERSION}\0`` from `./version.js` instead of deriving it from `DOMAIN_SEPARATORS.MESSAGE`.
 - For private SDK constants that are not exported, prefer a root `node:test` regression against the built `packages/agent-world-sdk/dist` artifact plus a narrow runtime verification instead of widening the public API only for tests.
 - For direct SDK handler regressions that the integrated HTTP suites do not hit, prefer a root `node:test` file that imports built `packages/agent-world-sdk/dist` entrypoints and exercises `registerPeerRoutes()` with `fastify.inject()` instead of starting a network listener.
+- In `packages/agent-world-sdk/src/peer-protocol.ts`, callback-style `reply.send(...)` branches inside `registerPeerRoutes()` should explicitly `return reply.send(...)` so custom responders do not leave the async handler control flow ambiguous.
 - For deterministic identity-helper regressions in this branch, use `nacl.sign.keyPair.fromSeed(Buffer.alloc(32, 1))`; its public key is `iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=` and it maps to stable literals for both `deriveDidKey()` and `toPublicKeyMultibase()`.
 - For Base58 zero-boundary fixes in this repo, both codec halves need explicit all-zero handling: the encoder must not append the synthetic zero digit after leading `1`s, and the decoder must not retain the synthetic accumulator byte for all-leading-`1` inputs.
 - Direct Base58 boundary regressions in `test/base58.test.mjs` should import compiled helpers from the SDK `dist/` split points: `base58Encode` from `dist/identity.js` and `base58Decode` from `dist/peer-protocol.js`.
@@ -39,6 +40,17 @@
   - The narrowest regression for a private SDK constant in this repo is a root `node:test` file that inspects the compiled `dist` artifact and then proves the resolved constant through one runtime behavior check.
   - Keeping `LEDGER_SEPARATOR` private avoids widening the SDK surface for a test-only need, while still letting the regression pin the exact constant form.
   - Full validation for this branch remains `npm run build && npm --prefix packages/agent-world-sdk run build && node --test test/*.test.mjs` because the root tests read both compiled trees.
+---
+
+## 2026-03-22 15:17:39 UTC - T-007
+- Updated the callback responder in `packages/agent-world-sdk/src/peer-protocol.ts` so `/peer/message` now explicitly returns `reply.send(body)` after applying any optional status code.
+- Recorded the reusable callback-return convention in `AGENTS.md` and the consolidated Codebase Patterns section.
+- Verified the story with `npm --prefix packages/agent-world-sdk run build`.
+- Files changed: `packages/agent-world-sdk/src/peer-protocol.ts`, `AGENTS.md`, `.hal/auto-prd.json`, `.hal/progress.txt`
+- **Learnings for future iterations:**
+  - In `registerPeerRoutes()`, the custom `onMessage` reply callback should return `reply.send(...)` once it takes over the response so the enclosing async Fastify handler has a clear terminal path.
+  - This fix is intentionally control-flow only; it should not change the callback path’s existing status codes or JSON payloads.
+  - A scoped SDK build is enough to validate this story before the next regression-test story adds dedicated coverage.
 ---
 
 ## 2026-03-22 15:11:20 UTC - T-004

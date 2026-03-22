@@ -99,8 +99,8 @@
         "Typecheck passes"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Updated the callback-based `/peer/message` branch in `packages/agent-world-sdk/src/peer-protocol.ts` so the custom responder now explicitly returns `reply.send(body)` after any optional status code is applied. The change stays limited to the control-flow fix and preserves the existing success and error payload behavior."
     },
     {
       "id": "T-008",
