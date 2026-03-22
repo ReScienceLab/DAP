@@ -288,3 +288,11 @@
   - Exporting the codec helper through the SDK surface keeps the regression focused on the compiled implementation and avoids brittle test-only module hacks.
   - This story did not require an `AGENTS.md` update because the reusable Base58 codec split and regression-shape guidance were already documented there and in the Codebase Patterns section.
 ---
+## 2026-03-22 14:48:23 UTC - T-005
+- Re-verified the direct encode regression story against the current branch state: `test/base58.test.mjs` still covers `[0]`, `[0,0]`, `[0,1]`, `[1]`, and `[1,0]` using the compiled SDK artifact import.
+- Re-ran `npm --prefix packages/agent-world-sdk run build` and `node --test test/base58.test.mjs`; both checks passed.
+- Files changed: `.hal/auto-prd.json`, `.hal/progress.txt`
+- **Learnings for future iterations:**
+  - When Hal bookkeeping and branch state drift, prefer a targeted verification pass before flipping `passes` so the PRD matches the code already on disk.
+  - For the encode-only codec story, a focused SDK build plus the dedicated `test/base58.test.mjs` run is enough to confirm acceptance without rerunning unrelated suites.
+---

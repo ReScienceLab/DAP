@@ -72,8 +72,8 @@
         "Typecheck passes"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Verified `test/base58.test.mjs` exists and asserts exact encode results for `[0]`, `[0,0]`, `[0,1]`, `[1]`, and `[1,0]` by importing `base58Encode` from the built SDK artifact at `packages/agent-world-sdk/dist/identity.js`. Re-ran `npm --prefix packages/agent-world-sdk run build` and `node --test test/base58.test.mjs`; both passed."
     },
     {
       "id": "T-006",
