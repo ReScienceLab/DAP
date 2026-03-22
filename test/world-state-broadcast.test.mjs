@@ -1,4 +1,4 @@
-import { after, before, describe, it } from "node:test"
+import { after, afterEach, before, describe, it } from "node:test"
 import assert from "node:assert/strict"
 import * as fs from "node:fs"
 import * as os from "node:os"
@@ -130,6 +130,10 @@ describe("World state broadcast delivery", () => {
     )
   })
 
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+  })
+
   after(async () => {
     globalThis.fetch = originalFetch
     await server.stop()
@@ -148,6 +152,39 @@ describe("World state broadcast delivery", () => {
       ),
       true
     )
+  })
+
+  it("does not broadcast world.state to a known peer that never joined the world", async () => {
+    const hits = []
+
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+      const parsed = new URL(url)
+      if (parsed.pathname === "/peer/message" && parsed.port === "29003") {
+        hits.push({
+          url,
+          headers: init?.headers,
+          body: JSON.parse(String(init?.body ?? "{}")),
+        })
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      return originalFetch(input, init)
+    }
+
+    const { agentId, announceResp } = await createKnownNonMemberFixture()
+
+    assert.equal(Array.isArray(announceResp.peers), true)
+    assert.equal(
+      announceResp.peers.some((peer) => peer.agentId === agentId),
+      true
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 350))
+
+    assert.equal(hits.length, 0)
   })
 
   it("broadcasts world.state to each registered endpoint for an active member", async () => {

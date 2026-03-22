@@ -109,3 +109,12 @@
   - Keeping the non-member fixture in a helper avoids duplicating announce-signing setup across the upcoming exclusion and inclusion tests in this file.
   - Full validation for these stories should continue using both package builds before `node --test test/*.test.mjs`, since this test imports SDK `dist/` output.
 ---
+## 2026-03-22 13:58:04 UTC - T-006
+- Added a regression in `test/world-state-broadcast.test.mjs` that intercepts outbound `/peer/message` sends, announces a reachable non-member peer, waits across multiple broadcast intervals, and asserts that no `world.state` delivery is attempted to that endpoint.
+- Added `afterEach()` fetch restoration in the same test file so the exclusion and inclusion cases do not leak mocked network behavior into each other.
+- Files changed: `test/world-state-broadcast.test.mjs`, `.hal/auto-prd.json`, `.hal/progress.txt`
+- **Learnings for future iterations:**
+  - The clearest way to prove a broadcast exclusion in this suite is to intercept `fetch`, seed the peer through `/peer/announce`, wait longer than one broadcast interval, and assert zero `/peer/message` hits for the non-member endpoint.
+  - Restoring `globalThis.fetch` after each broadcast test keeps negative and positive delivery assertions isolated while still sharing one world server fixture.
+  - Full validation for this branch remains `npm run build && npm --prefix packages/agent-world-sdk run build && node --test test/*.test.mjs`.
+---

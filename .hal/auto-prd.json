@@ -84,8 +84,8 @@
         "Typecheck passes"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Extended test/world-state-broadcast.test.mjs with a regression that announces a reachable peer without sending world.join, waits across several broadcast intervals, and asserts no /peer/message send attempt is made to that non-member endpoint. The test fails under the old peerDb recipient-selection path and passes with membership-based targeting."
     },
     {
       "id": "T-007",
