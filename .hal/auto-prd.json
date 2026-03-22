@@ -71,8 +71,8 @@
         "Typecheck passes"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Updated `packages/agent-world-sdk/src/world-ledger.ts` to import `PROTOCOL_VERSION` from `./version.js` and define `LEDGER_SEPARATOR` directly as ``AgentWorld-Ledger-${PROTOCOL_VERSION}\\0``. Removed the obsolete `DOMAIN_SEPARATORS.MESSAGE`-based derivation logic and verified the change with `npm --prefix packages/agent-world-sdk run build`."
     },
     {
       "id": "T-006",

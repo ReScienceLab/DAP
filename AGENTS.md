@@ -97,6 +97,9 @@ All runtime config is in `openclaw.json` under `plugins.entries.awn.config`:
 - For canonical zero-value boundaries, both codec halves need an explicit all-zero special case: `base58Encode()` must return only the leading `1` prefix run for all-zero byte arrays, and `base58Decode()` must return exactly one zero byte per leading `1` without keeping an extra synthetic accumulator byte.
 - For codec regressions, prefer a dedicated root test file that imports built `dist/` artifacts and asserts the canonical boundary cases `[0]`, `[0,0]`, `[0,1]`, `[1]`, and `[1,0]` directly instead of only relying on broader identity or protocol tests.
 
+### SDK World Ledger
+- In `packages/agent-world-sdk/src/world-ledger.ts`, keep `LEDGER_SEPARATOR` defined directly as ``AgentWorld-Ledger-${PROTOCOL_VERSION}\0`` by importing `PROTOCOL_VERSION` from `./version.js`; do not derive it indirectly from `DOMAIN_SEPARATORS.MESSAGE`.
+
 ### World Server Membership
 - In `packages/agent-world-sdk/src/world-server.ts`, joined-world membership is tracked by `agentLastSeen` and `agentEndpoints`; `getMembers()` already treats active members as the intersection of those maps.
 - `peerDb` is broader discovery state and may include known peers outside the active world membership, so broadcast recipient selection should not use `peerDb` as the source of truth for world-state delivery.
