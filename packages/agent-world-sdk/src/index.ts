@@ -23,7 +23,7 @@ export {
 export { buildSignedAgentCard, verifyAgentCard } from "./card.js";
 export type { AgentCardOpts } from "./card.js";
 export { PeerDb } from "./peer-db.js";
-export { announceToGateway, startGatewayAnnounce } from "./gateway-announce.js";
+export { announceToGateway, startGatewayAnnounce, sendHeartbeat } from "./gateway-announce.js";
 export { registerPeerRoutes, multibaseToBase64, base58Decode } from "./peer-protocol.js";
 export { createWorldServer } from "./world-server.js";
 export { WorldLedger } from "./world-ledger.js";

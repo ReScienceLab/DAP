@@ -13,6 +13,7 @@
  *   GET  /peer/ping       — peer liveness
  *   GET  /peer/peers      — known peers exchange
  *   POST /peer/announce   — world server registration
+ *   POST /peer/heartbeat  — lightweight liveness heartbeat
  *   POST /peer/message    — inbound signed message (world.state broadcasts)
  *
  * WebSocket:
@@ -28,6 +29,8 @@
  *   PEER_PORT         — outbound port for world agent connections (default 8099)
  *   PUBLIC_ADDR       — own public IP/hostname for AWN announce
  *   DATA_DIR          — identity persistence (default /data)
+ *   STALE_TTL_MS      — agent stale TTL in ms (default 90000)
+ *   WEBHOOK_URL       — optional URL for world.announced webhook notifications
  */
 import fs from "node:fs"
 import path from "node:path"
@@ -54,7 +57,8 @@ const DEFAULT_HTTP_PORT = parseInt(process.env.HTTP_PORT ?? "8100")
 const DEFAULT_PUBLIC_ADDR = process.env.PUBLIC_ADDR ?? null
 const DEFAULT_PUBLIC_URL = process.env.PUBLIC_URL ?? null
 const DEFAULT_DATA_DIR = process.env.DATA_DIR ?? "/data"
-const DEFAULT_STALE_TTL_MS = parseInt(process.env.STALE_TTL_MS ?? String(15 * 60 * 1000))
+const DEFAULT_STALE_TTL_MS = parseInt(process.env.STALE_TTL_MS ?? String(90 * 1000))
+const WEBHOOK_URL = process.env.WEBHOOK_URL ?? null
 const MAX_AGENTS = 500
 const REGISTRY_VERSION = 1
 const SAVE_DEBOUNCE_MS = 1000
@@ -71,6 +75,7 @@ export async function createGatewayApp(opts = {}) {
     publicAddr = DEFAULT_PUBLIC_ADDR,
     publicUrl = DEFAULT_PUBLIC_URL,
     staleTtlMs = DEFAULT_STALE_TTL_MS,
+    webhookUrl = WEBHOOK_URL,
   } = opts
 
   const REGISTRY_PATH = path.join(dataDir, "registry.json")
@@ -90,7 +95,7 @@ export async function createGatewayApp(opts = {}) {
 
   const registry = new Map() // agentId -> PeerRecord
   let _saveTimer = null
-  let _pruneTimer = null
+  let _tickTimer = null
   let _shutdownPromise = null
   let _registryModifiedAt = null
 
@@ -178,6 +183,7 @@ export async function createGatewayApp(opts = {}) {
     const persist = opts.persist === true
     const now = Date.now()
     const existing = registry.get(agentId)
+    const firstSeen = existing === undefined
     const lastSeen = opts.lastSeen
       ? Math.max(existing?.lastSeen ?? 0, opts.lastSeen)
       : now
@@ -203,6 +209,17 @@ export async function createGatewayApp(opts = {}) {
     if (persist && (changed || trimmed)) {
       saveRegistry()
     }
+    if (firstSeen && webhookUrl) {
+      const caps = nextRecord.capabilities ?? []
+      const worldCap = caps.find((c) => c.startsWith("world:"))
+      const worldId = worldCap ? worldCap.slice("world:".length) : undefined
+      fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event: "world.announced", agentId, worldId, ts: Date.now() }),
+        signal: AbortSignal.timeout(5_000),
+      }).catch(() => {})
+    }
   }
 
   function pruneStaleAgents(ttl = staleTtlMs) {
@@ -212,7 +229,7 @@ export async function createGatewayApp(opts = {}) {
       if (p.lastSeen < cutoff) { registry.delete(id); pruned++ }
     }
     if (pruned > 0) {
-      console.log(`[gateway] Pruned ${pruned} stale agent(s) (TTL ${Math.round(ttl / 60000)}min)`)
+      console.log(`[gateway] Pruned ${pruned} stale agent(s) (TTL ${ttl / 1000}s)`)
       flushRegistry()
     }
   }
@@ -488,6 +505,29 @@ export async function createGatewayApp(opts = {}) {
       return { ok: true, peers: getAgentsForExchange(20) };
     });
 
+    peer.post("/peer/heartbeat", async (req, reply) => {
+      const { agentId, ts, signature } = req.body ?? {};
+      if (!agentId || !ts || !signature) return reply.code(400).send({ error: "Invalid heartbeat" });
+
+      const skew = Math.abs(Date.now() - ts);
+      if (skew > 5 * 60 * 1000) return reply.code(400).send({ error: "Timestamp out of range" });
+
+      const existing = registry.get(agentId);
+      if (!existing) return reply.code(404).send({ error: "Unknown agent" });
+
+      const ok = verifyWithDomainSeparator(
+        DOMAIN_SEPARATORS.HEARTBEAT,
+        existing.publicKey,
+        { agentId, ts },
+        signature
+      );
+      if (!ok) return reply.code(403).send({ error: "Invalid signature" });
+
+      existing.lastSeen = Date.now();
+      _registryModifiedAt = existing.lastSeen;
+      return { ok: true };
+    });
+
     peer.post("/peer/message", async (req, reply) => {
       const msg = req.body;
       if (!msg?.publicKey || !msg?.from) return reply.code(400).send({ error: "Invalid message" });
@@ -523,9 +563,9 @@ export async function createGatewayApp(opts = {}) {
     if (_shutdownPromise) return _shutdownPromise
 
     _shutdownPromise = (async () => {
-      if (_pruneTimer) {
-        clearInterval(_pruneTimer)
-        _pruneTimer = null
+      if (_tickTimer) {
+        clearInterval(_tickTimer)
+        _tickTimer = null
       }
       flushRegistry()
       try {
@@ -543,7 +583,14 @@ export async function createGatewayApp(opts = {}) {
     await app.listen({ port: httpPort, host: "::" })
     console.log(`[gateway] agentId=${selfAgentId}`)
     console.log(`[gateway] HTTP on [::]:${httpPort}`)
-    _pruneTimer = setInterval(() => pruneStaleAgents(), 3 * 60 * 1000)
+    _tickTimer = setInterval(() => {
+      pruneStaleAgents()
+      if (_registryModifiedAt !== null) {
+        try { writeRegistry() } catch (error) {
+          console.warn("[gateway] Periodic snapshot failed", error)
+        }
+      }
+    }, 30_000)
     for (const signal of ["SIGTERM", "SIGINT"]) {
       process.once(signal, () => void stop())
     }

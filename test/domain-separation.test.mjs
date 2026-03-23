@@ -206,6 +206,46 @@ describe("Domain-Separated Signatures", () => {
     assert.equal(validAsMessage, false);
   });
 
+  test("Heartbeat signature cannot be replayed in other contexts", () => {
+    const heartbeatPayload = {
+      agentId: "aw:sha256:test123",
+      ts: Date.now(),
+    };
+
+    const heartbeatSig = signWithDomainSeparator(
+      DOMAIN_SEPARATORS.HEARTBEAT,
+      heartbeatPayload,
+      secretKey
+    );
+
+    // Valid in HEARTBEAT context
+    const validAsHeartbeat = verifyWithDomainSeparator(
+      DOMAIN_SEPARATORS.HEARTBEAT,
+      publicKeyB64,
+      heartbeatPayload,
+      heartbeatSig
+    );
+    assert.ok(validAsHeartbeat);
+
+    // Attacker tries to replay as announce
+    const validAsAnnounce = verifyWithDomainSeparator(
+      DOMAIN_SEPARATORS.ANNOUNCE,
+      publicKeyB64,
+      heartbeatPayload,
+      heartbeatSig
+    );
+    assert.equal(validAsAnnounce, false);
+
+    // Attacker tries to replay as message
+    const validAsMessage = verifyWithDomainSeparator(
+      DOMAIN_SEPARATORS.MESSAGE,
+      publicKeyB64,
+      heartbeatPayload,
+      heartbeatSig
+    );
+    assert.equal(validAsMessage, false);
+  });
+
   test("tampered payload fails verification even with correct separator", () => {
     const sig = signWithDomainSeparator(
       DOMAIN_SEPARATORS.MESSAGE,

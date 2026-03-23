@@ -24,6 +24,8 @@ ENV DATA_DIR=/data
 ENV PEER_PORT=8099
 # Set PUBLIC_URL to enable Agent Card, e.g. https://gateway.agentworlds.ai
 ENV PUBLIC_URL=""
+# Optional webhook URL for world.announced notifications
+ENV WEBHOOK_URL=""
 
 EXPOSE 8100
 

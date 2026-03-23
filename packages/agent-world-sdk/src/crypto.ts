@@ -27,6 +27,7 @@ export const DOMAIN_SEPARATORS = {
   ANNOUNCE: `AgentWorld-Announce-${PROTOCOL_VERSION}\0`,
   MESSAGE: `AgentWorld-Message-${PROTOCOL_VERSION}\0`,
   WORLD_STATE: `AgentWorld-WorldState-${PROTOCOL_VERSION}\0`,
+  HEARTBEAT: `AgentWorld-Heartbeat-${PROTOCOL_VERSION}\0`,
 } as const;
 
 /**

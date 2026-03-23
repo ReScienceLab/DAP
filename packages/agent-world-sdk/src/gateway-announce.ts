@@ -104,6 +104,39 @@ export async function announceToGateway(
   }
 }
 
+/**
+ * Send a lightweight heartbeat to a gateway.
+ * Returns true if the gateway accepted it, false if it responded with
+ * 404/403 (agent unknown or key mismatch — caller should re-announce).
+ * Network errors return true (no re-announce needed, gateway is just unreachable).
+ */
+export async function sendHeartbeat(
+  gatewayUrl: string,
+  identity: Identity
+): Promise<boolean> {
+  const url = `${gatewayUrl.replace(/\/+$/, "")}/peer/heartbeat`;
+  const ts = Date.now();
+  const payload = { agentId: identity.agentId, ts };
+  const signature = signWithDomainSeparator(
+    DOMAIN_SEPARATORS.HEARTBEAT,
+    payload,
+    identity.secretKey
+  );
+  try {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, signature }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (resp.status === 404 || resp.status === 403) return false;
+    return true;
+  } catch {
+    // gateway unreachable — skip silently
+    return true;
+  }
+}
+
 export interface GatewayAnnounceOpts extends AnnounceOpts {
   gatewayUrls?: string | string[];
   intervalMs?: number;
@@ -134,16 +167,30 @@ export async function startGatewayAnnounce(opts: GatewayAnnounceOpts): Promise<(
     onDiscovery?.(opts.peerDb.size);
   }
 
+  async function runHeartbeat() {
+    const results = await Promise.allSettled(
+      urls.map(async (u) => ({ url: u, ok: await sendHeartbeat(u, opts.identity) }))
+    );
+    // Re-announce to any gateway that rejected the heartbeat (404/403)
+    const reannounce = results
+      .filter((r): r is PromiseFulfilledResult<{ url: string; ok: boolean }> =>
+        r.status === "fulfilled" && !r.value.ok)
+      .map((r) => announceToGateway(r.value.url, opts));
+    if (reannounce.length) await Promise.allSettled(reannounce);
+  }
+
   let startupTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
     startupTimer = undefined;
     void runAnnounce();
   }, 3_000);
   const timer = setInterval(runAnnounce, intervalMs);
+  const heartbeatTimer = setInterval(runHeartbeat, 30_000);
   return () => {
     if (startupTimer) {
       clearTimeout(startupTimer);
       startupTimer = undefined;
     }
     clearInterval(timer);
+    clearInterval(heartbeatTimer);
   };
 }
