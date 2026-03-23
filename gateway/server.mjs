@@ -362,6 +362,7 @@ app.get("/world/:worldId", async (req, reply) => {
   return {
     worldId,
     agentId: w.agentId,
+    publicKey: w.publicKey,
     name: w.alias || worldId,
     endpoints: w.endpoints,
     reachable: w.endpoints?.length > 0,
