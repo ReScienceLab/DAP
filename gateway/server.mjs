@@ -25,6 +25,7 @@
  *
  * Env:
  *   HTTP_PORT         — gateway public HTTP port (default 8100)
+ *   PEER_PORT         — outbound port for world agent connections (default 8099)
  *   PUBLIC_ADDR       — own public IP/hostname for AWN announce
  *   DATA_DIR          — identity persistence (default /data)
  */
@@ -295,16 +296,6 @@ const app = Fastify({ logger: false });
 await app.register(cors, { origin: true });
 await app.register(websocketPlugin);
 
-// Preserve raw request body for Content-Digest verification (needed by /peer/* routes)
-app.addContentTypeParser("application/json", { parseAs: "string" }, (req, body, done) => {
-  try {
-    req.rawBody = body;
-    done(null, JSON.parse(body));
-  } catch (err) {
-    done(err, undefined);
-  }
-});
-
 app.get("/health", async () => {
   const ts = Date.now()
   const worlds = findByCapability("world:").length
@@ -445,62 +436,76 @@ app.get("/ws", { websocket: true }, (socket, req) => {
 
 // ---------------------------------------------------------------------------
 // Peer routes (unified on HTTP_PORT — previously a separate server on PEER_PORT)
+// Scoped in a plugin so the rawBody content-type parser is isolated to /peer/*
 // ---------------------------------------------------------------------------
 
-app.get("/peer/ping", async () => ({ ok: true, ts: Date.now(), role: "gateway" }));
-app.get("/peer/peers", async () => ({ peers: getAgentsForExchange() }));
-
-app.post("/peer/announce", async (req, reply) => {
-  const ann = req.body;
-  if (!ann?.publicKey || !ann?.from) return reply.code(400).send({ error: "Invalid announce" });
-
-  const awSig = req.headers["x-agentworld-signature"];
-  if (awSig) {
-    const authority = req.headers["host"] ?? "localhost";
-    const result = verifyHttpRequestHeaders(req.headers, req.method, req.url, authority, req.rawBody, ann.publicKey);
-    if (!result.ok) return reply.code(403).send({ error: result.error });
-  } else {
-    const { signature, ...signable } = ann;
-    // Try domain-separated verification first, then fall back to plain for backward compat
-    const domainOk = verifyWithDomainSeparator(DOMAIN_SEPARATORS.ANNOUNCE, ann.publicKey, signable, signature);
-    if (!domainOk && !verifySignature(ann.publicKey, signable, signature)) {
-      return reply.code(403).send({ error: "Invalid signature" });
+await app.register(async (peer) => {
+  // rawBody needed for Content-Digest verification; scoped here to avoid
+  // overriding the default JSON parser on all other routes
+  peer.addContentTypeParser("application/json", { parseAs: "string" }, (req, body, done) => {
+    try {
+      req.rawBody = body;
+      done(null, JSON.parse(body));
+    } catch (err) {
+      done(err, undefined);
     }
-  }
-
-  if (agentIdFromPublicKey(ann.publicKey) !== ann.from) {
-    return reply.code(400).send({ error: "agentId mismatch" });
-  }
-  upsertAgent(ann.from, ann.publicKey, {
-    alias: ann.alias, endpoints: ann.endpoints, capabilities: ann.capabilities, persist: true,
   });
-  return { ok: true, peers: getAgentsForExchange(20) };
-});
 
-app.post("/peer/message", async (req, reply) => {
-  const msg = req.body;
-  if (!msg?.publicKey || !msg?.from) return reply.code(400).send({ error: "Invalid message" });
+  peer.get("/peer/ping", async () => ({ ok: true, ts: Date.now(), role: "gateway" }));
+  peer.get("/peer/peers", async () => ({ peers: getAgentsForExchange() }));
 
-  const awSig = req.headers["x-agentworld-signature"];
-  if (awSig) {
-    const authority = req.headers["host"] ?? "localhost";
-    const result = verifyHttpRequestHeaders(req.headers, req.method, req.url, authority, req.rawBody, msg.publicKey);
-    if (!result.ok) return reply.code(403).send({ error: result.error });
-  } else {
-    const { signature, ...signable } = msg;
-    if (!verifySignature(msg.publicKey, signable, signature)) {
-      return reply.code(403).send({ error: "Invalid signature" });
+  peer.post("/peer/announce", async (req, reply) => {
+    const ann = req.body;
+    if (!ann?.publicKey || !ann?.from) return reply.code(400).send({ error: "Invalid announce" });
+
+    const awSig = req.headers["x-agentworld-signature"];
+    if (awSig) {
+      const authority = req.headers["host"] ?? "localhost";
+      const result = verifyHttpRequestHeaders(req.headers, req.method, req.url, authority, req.rawBody, ann.publicKey);
+      if (!result.ok) return reply.code(403).send({ error: result.error });
+    } else {
+      const { signature, ...signable } = ann;
+      // Try domain-separated verification first, then fall back to plain for backward compat
+      const domainOk = verifyWithDomainSeparator(DOMAIN_SEPARATORS.ANNOUNCE, ann.publicKey, signable, signature);
+      if (!domainOk && !verifySignature(ann.publicKey, signable, signature)) {
+        return reply.code(403).send({ error: "Invalid signature" });
+      }
     }
-  }
 
-  if (msg.event === "world.state") {
-    let state;
-    try { state = typeof msg.content === "string" ? JSON.parse(msg.content) : msg.content; } catch { return { ok: true }; }
-    const worldId = state.worldId;
-    if (worldId) broadcast(worldId, { type: "world.state", ...state });
-  }
+    if (agentIdFromPublicKey(ann.publicKey) !== ann.from) {
+      return reply.code(400).send({ error: "agentId mismatch" });
+    }
+    upsertAgent(ann.from, ann.publicKey, {
+      alias: ann.alias, endpoints: ann.endpoints, capabilities: ann.capabilities, persist: true,
+    });
+    return { ok: true, peers: getAgentsForExchange(20) };
+  });
 
-  return { ok: true };
+  peer.post("/peer/message", async (req, reply) => {
+    const msg = req.body;
+    if (!msg?.publicKey || !msg?.from) return reply.code(400).send({ error: "Invalid message" });
+
+    const awSig = req.headers["x-agentworld-signature"];
+    if (awSig) {
+      const authority = req.headers["host"] ?? "localhost";
+      const result = verifyHttpRequestHeaders(req.headers, req.method, req.url, authority, req.rawBody, msg.publicKey);
+      if (!result.ok) return reply.code(403).send({ error: result.error });
+    } else {
+      const { signature, ...signable } = msg;
+      if (!verifySignature(msg.publicKey, signable, signature)) {
+        return reply.code(403).send({ error: "Invalid signature" });
+      }
+    }
+
+    if (msg.event === "world.state") {
+      let state;
+      try { state = typeof msg.content === "string" ? JSON.parse(msg.content) : msg.content; } catch { return { ok: true }; }
+      const worldId = state.worldId;
+      if (worldId) broadcast(worldId, { type: "world.state", ...state });
+    }
+
+    return { ok: true };
+  });
 });
 
 // ---------------------------------------------------------------------------
