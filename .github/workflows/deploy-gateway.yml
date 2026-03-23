@@ -33,6 +33,43 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: us-east-2
 
+      - name: Update Cloudflare DNS
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+        run: |
+          EC2_IP=$(aws ec2 describe-instances \
+            --instance-ids "$INSTANCE_ID" \
+            --region us-east-2 \
+            --query "Reservations[0].Instances[0].PublicIpAddress" \
+            --output text)
+          echo "EC2 public IP: $EC2_IP"
+
+          EXISTING=$(curl -sf \
+            "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records?type=A&name=gateway.agentsworlds.ai" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json")
+
+          RECORD_ID=$(echo "$EXISTING" | jq -r '.result[0].id // empty')
+
+          PAYLOAD="{\"type\":\"A\",\"name\":\"gateway.agentsworlds.ai\",\"content\":\"$EC2_IP\",\"ttl\":1,\"proxied\":false}"
+
+          if [ -n "$RECORD_ID" ]; then
+            curl -sf -X PUT \
+              "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records/$RECORD_ID" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD"
+            echo "Updated DNS A record $RECORD_ID → $EC2_IP"
+          else
+            curl -sf -X POST \
+              "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records" \
+              -H "Authorization: Bearer $CF_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD"
+            echo "Created DNS A record gateway.agentsworlds.ai → $EC2_IP"
+          fi
+
       - name: Login to Amazon ECR
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
@@ -57,7 +94,7 @@ jobs:
           # credential helper for authentication instead of the aws CLI.
           PARAMS=$(jq -cn \
             --arg pull "docker pull $IMAGE" \
-            --arg run "docker run -d --name awn-gateway --restart unless-stopped -p 8099:8099 -p 8100:8100 -v /opt/awn-gateway/data:/data -e PEER_PORT=8099 -e HTTP_PORT=8100 -e DATA_DIR=/data $IMAGE" \
+            --arg run "docker run -d --name awn-gateway --restart unless-stopped -p 8099:8099 -p 80:8100 -v /opt/awn-gateway/data:/data -e PEER_PORT=8099 -e HTTP_PORT=8100 -e DATA_DIR=/data -e PUBLIC_URL=http://gateway.agentsworlds.ai -e PUBLIC_ADDR=gateway.agentsworlds.ai $IMAGE" \
             '{commands: [
               "command -v amazon-ecr-credential-helper >/dev/null 2>&1 || apt-get install -y amazon-ecr-credential-helper",
               "mkdir -p /root/.docker && printf '"'"'{\"credsStore\":\"ecr-login\"}'"'"' > /root/.docker/config.json",
@@ -65,7 +102,7 @@ jobs:
               "docker stop awn-gateway 2>/dev/null || true",
               "docker rm awn-gateway 2>/dev/null || true",
               "fuser -k 8099/tcp 2>/dev/null || true",
-              "fuser -k 8100/tcp 2>/dev/null || true",
+              "fuser -k 80/tcp 2>/dev/null || true",
               $run
             ]}')
 
@@ -119,7 +156,7 @@ jobs:
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
-            --parameters commands='["sleep 5","curl -sf http://localhost:8100/health"]' \
+            --parameters commands='["sleep 5","curl -sf http://localhost/health"]' \
             --region us-east-2 \
             --query "Command.CommandId" \
             --output text)
