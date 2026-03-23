@@ -191,9 +191,10 @@ No manual version bumping, no release scripts, no backmerge.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `release.yml` | Push to `main` | Changesets: create Version PR or publish npm + GH Release + ClawHub |
+| `release.yml` | Push to `main`, `workflow_dispatch` | Changesets: create Version PR or publish npm + GH Release + ClawHub |
 | `publish.yml` | `workflow_dispatch` only | Emergency manual npm publish |
-| `test.yml` | Push/PR to `main` | Build + test (Node 20+22) |
+| `test.yml` | Push/PR to `main`, `workflow_dispatch` | Build + test (Node 20+22) |
+| `changeset-check.yml` | PR to `main` | Ensure changeset present + validate packages |
 | `auto-close-issues.yml` | PR merged | Close linked issues |
 
 ### Branch Strategy
@@ -243,6 +244,22 @@ Semantic versioning: `vMAJOR.MINOR.PATCH`
 - PATCH: Bug fixes
 
 When adding a changeset, choose accordingly.
+
+### Changeset Pitfalls
+
+- **Only reference workspace packages.** The root package is `@resciencelab/agent-world-network`. The SDK (`@resciencelab/agent-world-sdk`) is a sub-package under `packages/` but has its own publish lifecycle. If a changeset `.md` references a package not in the workspace, `changeset version` will fail with `Found changeset … for package … which is not in the workspace`. The `changeset-check.yml` CI validates this before merge.
+- **ClawHub publish may fail independently.** The ClawHub step has `continue-on-error: true` because upstream bugs can fail it while npm + GitHub Release succeed. Check the workflow run summary — if only ClawHub failed, rerun that job or ignore it.
+- **Version Packages PR needs CI.** The release workflow auto-closes and reopens the Version Packages PR to trigger CI checks. If CI still doesn't run, manually close and reopen the PR or push an empty commit to the `changeset-release/main` branch.
+
+### Release Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Release workflow didn't run after merge | GitHub 502 / missed push event | Go to Actions > Release > "Run workflow" (workflow_dispatch) |
+| Version Packages PR can't merge (no CI checks) | `GITHUB_TOKEN` push doesn't trigger workflows | Close and reopen the PR, or push empty commit to `changeset-release/main` |
+| `changeset version` fails: "package not in workspace" | Changeset references non-workspace package | Edit `.changeset/*.md` to only list `@resciencelab/agent-world-network` |
+| ClawHub publish fails but npm succeeded | Upstream ClawHub/Convex bug | Ignore or rerun the failed job; npm + GH Release are fine |
+| Two release runs conflict | Concurrent pushes to `main` | `release.yml` has `concurrency: release` — second run queues |
 
 ### Gateway Discovery Deployment
 - This branch no longer ships or deploys a standalone `bootstrap/` service

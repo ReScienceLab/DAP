@@ -36,3 +36,43 @@ jobs:
           echo "Run 'npx changeset add', select patch/minor/major, write one line, and commit the result."
           echo "If this PR does not need a version bump (e.g. docs, CI, tests), add the 'skip-changelog' label."
           exit 1
+
+      - name: Validate changeset packages
+        run: |
+          # Collect workspace package names from root and packages/*/package.json
+          WORKSPACE_PKGS=$(node -e "
+            const fs = require('fs');
+            const root = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            const pkgs = [root.name];
+            try {
+              const dirs = fs.readdirSync('packages');
+              for (const d of dirs) {
+                const p = 'packages/' + d + '/package.json';
+                if (fs.existsSync(p)) pkgs.push(JSON.parse(fs.readFileSync(p, 'utf8')).name);
+              }
+            } catch {}
+            console.log(pkgs.join('\n'));
+          ")
+
+          ERRORS=0
+          for f in .changeset/*.md; do
+            [ "$f" = ".changeset/*.md" ] && break
+            [ "$(basename "$f")" = "README.md" ] && continue
+            # Extract package names from changeset frontmatter
+            PKGS=$(sed -n '/^---$/,/^---$/{ /^"/{s/"//g; s/:.*//; p}; /^[a-z@]/{s/:.*//; p} }' "$f")
+            for pkg in $PKGS; do
+              if ! echo "$WORKSPACE_PKGS" | grep -qxF "$pkg"; then
+                echo "::error file=$f::Changeset references '$pkg' which is not a workspace package."
+                echo "  Workspace packages: $(echo "$WORKSPACE_PKGS" | tr '\n' ', ')"
+                ERRORS=1
+              fi
+            done
+          done
+
+          if [ "$ERRORS" = "1" ]; then
+            echo ""
+            echo "Fix: edit the changeset .md to only reference packages in this workspace."
+            echo "The root package is '@resciencelab/agent-world-network'."
+            exit 1
+          fi
+          echo "All changeset packages are valid workspace members."

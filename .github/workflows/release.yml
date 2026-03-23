@@ -3,6 +3,11 @@ name: Release
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -45,8 +50,23 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      # GITHUB_TOKEN pushes don't trigger workflows on the Version Packages
+      # PR. Close and reopen it so CI checks run and branch protection is
+      # satisfied without manual intervention.
+      - name: Trigger CI on Version Packages PR
+        if: steps.changesets.outputs.pullRequestNumber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR=${{ steps.changesets.outputs.pullRequestNumber }}
+          gh pr close "$PR" --comment "Closing to trigger CI checks"
+          sleep 2
+          gh pr reopen "$PR"
+          echo "Reopened Version Packages PR #$PR to trigger CI"
+
       - name: Publish to ClawHub
         if: steps.changesets.outputs.published == 'true'
+        continue-on-error: true
         env:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
         run: |
