@@ -1,0 +1,81 @@
+name: Release CLI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/awn-cli
+
+      - name: Build
+        run: cargo build --release --manifest-path packages/awn-cli/Cargo.toml --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          VERSION=$(grep '^version' packages/awn-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          ARCHIVE_NAME="awn-v${VERSION}-${{ matrix.target }}"
+          mkdir -p "dist/${ARCHIVE_NAME}"
+          cp "packages/awn-cli/target/${{ matrix.target }}/release/awn" "dist/${ARCHIVE_NAME}/"
+          cp packages/awn-cli/skills/SKILL.md "dist/${ARCHIVE_NAME}/"
+          cd dist
+          tar czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
+          echo "ARCHIVE=${ARCHIVE_NAME}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: awn-${{ matrix.target }}
+          path: dist/${{ env.ARCHIVE }}
+
+  upload:
+    name: Upload to Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for f in artifacts/*.tar.gz; do
+            echo "Uploading $f"
+            gh release upload "${{ github.event.release.tag_name }}" "$f" \
+              --repo "${{ github.repository }}" \
+              --clobber
+          done

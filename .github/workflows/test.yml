@@ -33,3 +33,15 @@ jobs:
         run: npm --prefix packages/agent-world-sdk run build
       - if: "!startsWith(github.head_ref, 'changeset-release/')"
         run: node --test test/*.test.mjs
+
+  test-rust:
+    name: test (awn-cli)
+    runs-on: ubuntu-latest
+    if: "!startsWith(github.head_ref, 'changeset-release/')"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/awn-cli
+      - run: cargo test --manifest-path packages/awn-cli/Cargo.toml
