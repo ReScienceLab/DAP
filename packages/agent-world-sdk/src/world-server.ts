@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import { loadOrCreateIdentity } from "./identity.js";
-import { PeerDb } from "./peer-db.js";
-import { registerPeerRoutes } from "./peer-protocol.js";
+import { AgentDb } from "./agent-db.js";
+import { registerAgentRoutes } from "./agent-protocol.js";
 import { startGatewayAnnounce } from "./gateway-announce.js";
 import {
   canonicalize,
@@ -85,11 +85,12 @@ export async function createWorldServer(
   const resolvedPublicPort = publicPort ?? port;
 
   const identity = loadOrCreateIdentity(dataDir, "world-identity");
+  const protocolWorldId = identity.agentId
   console.log(
     `[world] agentId=${identity.agentId} world=${worldId} name="${worldName}"`
   );
 
-  const peerDb = new PeerDb({ staleTtlMs });
+  const agentDb = new AgentDb({ staleTtlMs });
 
   // Track agents currently in world for idle eviction
   const agentLastSeen = new Map<string, number>();
@@ -125,14 +126,15 @@ export async function createWorldServer(
   const fastify = Fastify({ logger: false });
 
   // Register peer protocol routes
-  registerPeerRoutes(fastify, {
+  registerAgentRoutes(fastify, {
     identity,
-    peerDb,
+    agentDb,
     card: cardUrl
       ? { name: cardName ?? worldName, description: cardDescription, cardUrl }
       : undefined,
     pingExtra: () => ({
-      worldId,
+      worldId: protocolWorldId,
+      slug: worldId,
       worldName,
       agents: agentLastSeen.size,
       ...(maxAgents ? { maxAgents } : {}),
@@ -163,7 +165,8 @@ export async function createWorldServer(
           ledger.append("world.join", agentId, alias || undefined);
           sendReply({
             ok: true,
-            worldId,
+            worldId: protocolWorldId,
+            slug: worldId,
             manifest: buildManifest(result.manifest),
             state: result.state,
             members: getMembers(agentId),
@@ -239,8 +242,8 @@ export async function createWorldServer(
 
   fastify.get("/world/members", async (req, reply) => {
     const from = req.headers["x-agentworld-from"] as string | undefined;
-    const peer = from ? peerDb.get(from) : undefined;
-    if (!peer?.publicKey) {
+    const agent = from ? agentDb.get(from) : undefined;
+    if (!agent?.publicKey) {
       return reply.code(403).send({ error: "Unknown member public key" });
     }
     const authority = (req.headers["host"] as string) ?? "localhost";
@@ -250,7 +253,7 @@ export async function createWorldServer(
       req.url,
       authority,
       "",
-      peer.publicKey
+      agent.publicKey
     );
     if (!result.ok) {
       return reply.code(403).send({ error: result.error });
@@ -348,8 +351,8 @@ export async function createWorldServer(
 
   // Stale peer pruning
   const pruneTimer = setInterval(() => {
-    const pruned = peerDb.prune();
-    if (pruned > 0) console.log(`[world] Pruned ${pruned} stale peer(s)`);
+    const pruned = agentDb.prune();
+    if (pruned > 0) console.log(`[world] Pruned ${pruned} stale agent(s)`);
   }, 5 * 60 * 1000);
 
   // Gateway announce
@@ -358,10 +361,11 @@ export async function createWorldServer(
     stopAnnounce = await startGatewayAnnounce({
       identity,
       alias: worldName,
+      slug: worldId,
       publicAddr,
       publicPort: resolvedPublicPort,
       capabilities: [`world:${worldId}`],
-      peerDb,
+      agentDb,
       gatewayUrls,
       intervalMs: announceIntervalMs,
       onDiscovery: (n) =>

@@ -11,28 +11,28 @@ describe("Gateway GET /worlds", () => {
 
   before(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gateway-worlds-"))
-    // Seed registry with a world agent so /worlds has data after loadRegistry()
+    const worldId = "aw:sha256:aaaa"
     const registry = {
       version: 1,
       savedAt: Date.now(),
-      agents: {
-        "aw:sha256:aaaa": {
-          agentId: "aw:sha256:aaaa",
+      worlds: {
+        [worldId]: {
+          worldId,
+          slug: "test-world",
           publicKey: "dGVzdA==",
-          alias: "Test World",
           endpoints: [{ transport: "tcp", address: "10.0.0.1", port: 8099, priority: 1 }],
-          capabilities: ["world:test-world"],
           lastSeen: Date.now(),
         },
       },
     }
-    fs.writeFileSync(path.join(tmpDir, "registry.json"), JSON.stringify(registry))
+    fs.writeFileSync(path.join(tmpDir, "worlds-registry.json"), JSON.stringify(registry))
+    fs.writeFileSync(path.join(tmpDir, "agents-registry.json"), JSON.stringify({ version: 1, savedAt: Date.now(), agents: {} }))
     ;({ app, start, stop } = await createGatewayApp({
       dataDir: tmpDir,
       httpPort: 0,
       staleTtlMs: 60 * 60 * 1000,
     }))
-    // start() calls loadRegistry() which reads the seeded file
+    // start() calls loadRegistries() which reads the seeded files
     await start()
   })
 
@@ -50,8 +50,8 @@ describe("Gateway GET /worlds", () => {
     assert.equal(body.worlds.length, 1)
 
     const world = body.worlds[0]
-    assert.equal(world.worldId, "test-world")
-    assert.equal(world.name, "Test World")
+    assert.equal(world.worldId, "aw:sha256:aaaa")
+    assert.equal(world.slug, "test-world")
     assert.equal(world.reachable, true)
     assert.ok(Array.isArray(world.endpoints), "endpoints must be an array in /worlds response")
     assert.equal(world.endpoints.length, 1)
@@ -84,7 +84,7 @@ describe("Gateway GET /worlds", () => {
     const schemas = Object.keys(spec.components?.schemas ?? {}).sort()
     assert.ok(schemas.includes("WorldSummary"), "must include WorldSummary schema")
     assert.ok(schemas.includes("Endpoint"), "must include Endpoint schema")
-    assert.ok(schemas.includes("PeerRecord"), "must include PeerRecord schema")
+    assert.ok(schemas.includes("AgentRecord"), "must include AgentRecord schema")
 
     for (const [route, schemaName] of [
       ["/agents", "AnnounceRequest"],

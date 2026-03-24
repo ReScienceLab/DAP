@@ -55,18 +55,18 @@ describe("Gateway /worlds/:worldId", () => {
 
   it("GET /worlds/:worldId includes publicKey after announce", async () => {
     const kp = makeKeypair()
-    const worldId = "pixel-city"
+    const slug = "pixel-city"
 
-    const annResp = await announce(kp, worldId)
+    const annResp = await announce(kp, slug)
     assert.equal(annResp.statusCode, 200, `announce failed: ${annResp.body}`)
 
-    const resp = await app.inject({ method: "GET", url: `/worlds/${worldId}` })
+    const resp = await app.inject({ method: "GET", url: `/worlds/${kp.agentId}` })
     assert.equal(resp.statusCode, 200)
 
     const body = JSON.parse(resp.body)
-    assert.equal(body.worldId, worldId)
+    assert.equal(body.worldId, kp.agentId)
+    assert.equal(body.slug, slug)
     assert.equal(body.publicKey, kp.publicKey, "publicKey must be present in /worlds/:worldId response")
-    assert.equal(body.agentId, kp.agentId)
   })
 
   it("GET /worlds/:worldId publicKey matches the announcing agent", async () => {
@@ -76,8 +76,8 @@ describe("Gateway /worlds/:worldId", () => {
     await announce(kp1, "arena-alpha")
     await announce(kp2, "arena-beta")
 
-    const r1 = JSON.parse((await app.inject({ method: "GET", url: "/worlds/arena-alpha" })).body)
-    const r2 = JSON.parse((await app.inject({ method: "GET", url: "/worlds/arena-beta" })).body)
+    const r1 = JSON.parse((await app.inject({ method: "GET", url: `/worlds/${kp1.agentId}` })).body)
+    const r2 = JSON.parse((await app.inject({ method: "GET", url: `/worlds/${kp2.agentId}` })).body)
 
     assert.equal(r1.publicKey, kp1.publicKey)
     assert.equal(r2.publicKey, kp2.publicKey)
@@ -91,31 +91,30 @@ describe("Gateway /worlds/:worldId", () => {
 
   it("DELETE /worlds/:worldId removes a known world", async () => {
     const kp = makeKeypair()
-    const worldId = "delete-me"
+    const slug = "delete-me"
 
-    await announce(kp, worldId)
-    const before = await app.inject({ method: "GET", url: `/worlds/${worldId}` })
+    await announce(kp, slug)
+    const before = await app.inject({ method: "GET", url: `/worlds/${kp.agentId}` })
     assert.equal(before.statusCode, 200)
 
-    const del = await app.inject({ method: "DELETE", url: `/worlds/${worldId}` })
+    const del = await app.inject({ method: "DELETE", url: `/worlds/${kp.agentId}` })
     assert.equal(del.statusCode, 200)
     const body = JSON.parse(del.body)
     assert.equal(body.ok, true)
     assert.equal(body.removed, 1)
 
-    const after = await app.inject({ method: "GET", url: `/worlds/${worldId}` })
+    const after = await app.inject({ method: "GET", url: `/worlds/${kp.agentId}` })
     assert.equal(after.statusCode, 404)
   })
 
   it("DELETE /worlds/:worldId returns 403 when GATEWAY_ADMIN_KEY is set and token is missing", async () => {
     const kp = makeKeypair()
-    const worldId = "protected-world"
-    await announce(kp, worldId)
+    await announce(kp, "protected-world")
 
     const prev = process.env.GATEWAY_ADMIN_KEY
     process.env.GATEWAY_ADMIN_KEY = "secret-test-key"
     try {
-      const resp = await app.inject({ method: "DELETE", url: `/worlds/${worldId}` })
+      const resp = await app.inject({ method: "DELETE", url: `/worlds/${kp.agentId}` })
       assert.equal(resp.statusCode, 403)
     } finally {
       if (prev === undefined) delete process.env.GATEWAY_ADMIN_KEY
@@ -125,15 +124,14 @@ describe("Gateway /worlds/:worldId", () => {
 
   it("DELETE /worlds/:worldId succeeds with correct GATEWAY_ADMIN_KEY bearer token", async () => {
     const kp = makeKeypair()
-    const worldId = "protected-world-2"
-    await announce(kp, worldId)
+    await announce(kp, "protected-world-2")
 
     const prev = process.env.GATEWAY_ADMIN_KEY
     process.env.GATEWAY_ADMIN_KEY = "secret-test-key"
     try {
       const resp = await app.inject({
         method: "DELETE",
-        url: `/worlds/${worldId}`,
+        url: `/worlds/${kp.agentId}`,
         headers: { authorization: "Bearer secret-test-key" },
       })
       assert.equal(resp.statusCode, 200)

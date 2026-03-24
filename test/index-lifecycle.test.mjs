@@ -7,9 +7,10 @@ const require = createRequire(import.meta.url)
 const MODULE_IDS = [
   "../dist/index.js",
   "../dist/identity.js",
-  "../dist/peer-db.js",
-  "../dist/peer-server.js",
-  "../dist/peer-client.js",
+  "../dist/agent-db.js",
+  "../dist/world-db.js",
+  "../dist/agent-server.js",
+  "../dist/agent-client.js",
   "../dist/channel.js",
   "../dist/transport.js",
   "../dist/transport-quic.js",
@@ -32,14 +33,16 @@ function createHarness({
   const fs = require("node:fs")
   const childProcess = require("node:child_process")
   const identityMod = require("../dist/identity.js")
-  const peerDbMod = require("../dist/peer-db.js")
-  const peerServerMod = require("../dist/peer-server.js")
-  const peerClientMod = require("../dist/peer-client.js")
+  const agentDbMod = require("../dist/agent-db.js")
+  const worldDbMod = require("../dist/world-db.js")
+  const agentServerMod = require("../dist/agent-server.js")
+  const agentClientMod = require("../dist/agent-client.js")
   const channelMod = require("../dist/channel.js")
   const transportMod = require("../dist/transport.js")
   const transportQuicMod = require("../dist/transport-quic.js")
 
-  const peers = new Map()
+  const agents = new Map()
+  const worlds = new Map()
   const sendCalls = []
   const gatewayMessages = []
   const timers = new Map()
@@ -51,22 +54,28 @@ function createHarness({
     existsSync: fs.existsSync,
     execSync: childProcess.execSync,
     loadOrCreateIdentity: identityMod.loadOrCreateIdentity,
-    initDb: peerDbMod.initDb,
-    listPeers: peerDbMod.listPeers,
-    getPeer: peerDbMod.getPeer,
-    flushDb: peerDbMod.flushDb,
-    getPeerIds: peerDbMod.getPeerIds,
-    setTofuTtl: peerDbMod.setTofuTtl,
-    findPeersByCapability: peerDbMod.findPeersByCapability,
-    upsertDiscoveredPeer: peerDbMod.upsertDiscoveredPeer,
-    removePeer: peerDbMod.removePeer,
-    startPeerServer: peerServerMod.startPeerServer,
-    stopPeerServer: peerServerMod.stopPeerServer,
-    setSelfMeta: peerServerMod.setSelfMeta,
-    handleUdpMessage: peerServerMod.handleUdpMessage,
-    getPeerPingInfo: peerClientMod.getPeerPingInfo,
-    sendP2PMessage: peerClientMod.sendP2PMessage,
-    broadcastLeave: peerClientMod.broadcastLeave,
+    initDb: agentDbMod.initDb,
+    listAgents: agentDbMod.listAgents,
+    getAgent: agentDbMod.getAgent,
+    flushDb: agentDbMod.flushDb,
+    getAgentIds: agentDbMod.getAgentIds,
+    setTofuTtl: agentDbMod.setTofuTtl,
+    findAgentsByCapability: agentDbMod.findAgentsByCapability,
+    upsertDiscoveredAgent: agentDbMod.upsertDiscoveredAgent,
+    removeAgent: agentDbMod.removeAgent,
+    initWorldDb: worldDbMod.initWorldDb,
+    listWorlds: worldDbMod.listWorlds,
+    getWorld: worldDbMod.getWorld,
+    getWorldBySlug: worldDbMod.getWorldBySlug,
+    upsertWorld: worldDbMod.upsertWorld,
+    flushWorldDb: worldDbMod.flushWorldDb,
+    startAgentServer: agentServerMod.startAgentServer,
+    stopAgentServer: agentServerMod.stopAgentServer,
+    setSelfMeta: agentServerMod.setSelfMeta,
+    handleUdpMessage: agentServerMod.handleUdpMessage,
+    getAgentPingInfo: agentClientMod.getAgentPingInfo,
+    sendP2PMessage: agentClientMod.sendP2PMessage,
+    broadcastLeave: agentClientMod.broadcastLeave,
     wireInboundToGateway: channelMod.wireInboundToGateway,
     TransportManager: transportMod.TransportManager,
     UDPTransport: transportQuicMod.UDPTransport,
@@ -86,16 +95,16 @@ function createHarness({
     privateKey: Buffer.alloc(32).toString("base64"),
   })
 
-  peerDbMod.initDb = () => {}
-  peerDbMod.listPeers = () => [...peers.values()]
-  peerDbMod.getPeer = (agentId) => peers.get(agentId) ?? null
-  peerDbMod.flushDb = () => {}
-  peerDbMod.getPeerIds = () => [...peers.keys()]
-  peerDbMod.setTofuTtl = () => {}
-  peerDbMod.findPeersByCapability = (capability) =>
-    [...peers.values()].filter((peer) => peer.capabilities?.includes(capability))
-  peerDbMod.upsertDiscoveredPeer = (agentId, publicKey, opts = {}) => {
-    const existing = peers.get(agentId) ?? {
+  agentDbMod.initDb = () => {}
+  agentDbMod.listAgents = () => [...agents.values()]
+  agentDbMod.getAgent = (agentId) => agents.get(agentId) ?? null
+  agentDbMod.flushDb = () => {}
+  agentDbMod.getAgentIds = () => [...agents.keys()]
+  agentDbMod.setTofuTtl = () => {}
+  agentDbMod.findAgentsByCapability = (capability) =>
+    [...agents.values()].filter((agent) => agent.capabilities?.includes(capability))
+  agentDbMod.upsertDiscoveredAgent = (agentId, publicKey, opts = {}) => {
+    const existing = agents.get(agentId) ?? {
       agentId,
       publicKey: "",
       alias: "",
@@ -103,7 +112,7 @@ function createHarness({
       capabilities: [],
       source: "gossip",
     }
-    peers.set(agentId, {
+    agents.set(agentId, {
       ...existing,
       publicKey: existing.publicKey || publicKey,
       alias: opts.alias ?? existing.alias,
@@ -112,22 +121,49 @@ function createHarness({
       source: opts.source ?? existing.source,
     })
   }
-  peerDbMod.removePeer = (agentId) => {
-    peers.delete(agentId)
+  agentDbMod.removeAgent = (agentId) => {
+    agents.delete(agentId)
   }
 
-  peerServerMod.startPeerServer = async () => {}
-  peerServerMod.stopPeerServer = async () => {}
-  peerServerMod.setSelfMeta = () => {}
-  peerServerMod.handleUdpMessage = () => {}
+  worldDbMod.initWorldDb = () => {}
+  worldDbMod.listWorlds = () => [...worlds.values()]
+  worldDbMod.getWorld = (worldId) => worlds.get(worldId) ?? null
+  worldDbMod.getWorldBySlug = (slug) =>
+    [...worlds.values()].find((world) => world.slug === slug) ?? null
+  worldDbMod.upsertWorld = (worldId, opts = {}) => {
+    const existing = worlds.get(worldId) ?? {
+      worldId,
+      slug: worldId,
+      publicKey: "",
+      endpoints: [],
+      lastSeen: 0,
+      source: "gossip",
+    }
+    worlds.set(worldId, {
+      ...existing,
+      ...opts,
+      worldId,
+      slug: opts.slug ?? existing.slug,
+      publicKey: opts.publicKey ?? existing.publicKey,
+      endpoints: opts.endpoints ?? existing.endpoints,
+      lastSeen: opts.lastSeen ?? Date.now(),
+      source: opts.source ?? existing.source,
+    })
+  }
+  worldDbMod.flushWorldDb = () => {}
 
-  peerClientMod.getPeerPingInfo = async () => pingInfo
-  peerClientMod.sendP2PMessage = async (_identity, targetAddr, event, content, port, timeoutMs, opts) => {
+  agentServerMod.startAgentServer = async () => {}
+  agentServerMod.stopAgentServer = async () => {}
+  agentServerMod.setSelfMeta = () => {}
+  agentServerMod.handleUdpMessage = () => {}
+
+  agentClientMod.getAgentPingInfo = async () => pingInfo
+  agentClientMod.sendP2PMessage = async (_identity, targetAddr, event, content, port, timeoutMs, opts) => {
     sendCalls.push({ targetAddr, event, content, port, timeoutMs, opts })
     if (event === "world.join") return joinResponse
     return { ok: true }
   }
-  peerClientMod.broadcastLeave = async () => {}
+  agentClientMod.broadcastLeave = async () => {}
 
   channelMod.wireInboundToGateway = () => {}
 
@@ -201,8 +237,9 @@ function createHarness({
   register(api)
 
   return {
-    peers,
-    peerServer: peerServerMod,
+    agents,
+    worlds,
+    agentServer: agentServerMod,
     sendCalls,
     gatewayMessages,
     fetchCalls,
@@ -226,22 +263,28 @@ function createHarness({
       fs.existsSync = originals.existsSync
       childProcess.execSync = originals.execSync
       identityMod.loadOrCreateIdentity = originals.loadOrCreateIdentity
-      peerDbMod.initDb = originals.initDb
-      peerDbMod.listPeers = originals.listPeers
-      peerDbMod.getPeer = originals.getPeer
-      peerDbMod.flushDb = originals.flushDb
-      peerDbMod.getPeerIds = originals.getPeerIds
-      peerDbMod.setTofuTtl = originals.setTofuTtl
-      peerDbMod.findPeersByCapability = originals.findPeersByCapability
-      peerDbMod.upsertDiscoveredPeer = originals.upsertDiscoveredPeer
-      peerDbMod.removePeer = originals.removePeer
-      peerServerMod.startPeerServer = originals.startPeerServer
-      peerServerMod.stopPeerServer = originals.stopPeerServer
-      peerServerMod.setSelfMeta = originals.setSelfMeta
-      peerServerMod.handleUdpMessage = originals.handleUdpMessage
-      peerClientMod.getPeerPingInfo = originals.getPeerPingInfo
-      peerClientMod.sendP2PMessage = originals.sendP2PMessage
-      peerClientMod.broadcastLeave = originals.broadcastLeave
+      agentDbMod.initDb = originals.initDb
+      agentDbMod.listAgents = originals.listAgents
+      agentDbMod.getAgent = originals.getAgent
+      agentDbMod.flushDb = originals.flushDb
+      agentDbMod.getAgentIds = originals.getAgentIds
+      agentDbMod.setTofuTtl = originals.setTofuTtl
+      agentDbMod.findAgentsByCapability = originals.findAgentsByCapability
+      agentDbMod.upsertDiscoveredAgent = originals.upsertDiscoveredAgent
+      agentDbMod.removeAgent = originals.removeAgent
+      worldDbMod.initWorldDb = originals.initWorldDb
+      worldDbMod.listWorlds = originals.listWorlds
+      worldDbMod.getWorld = originals.getWorld
+      worldDbMod.getWorldBySlug = originals.getWorldBySlug
+      worldDbMod.upsertWorld = originals.upsertWorld
+      worldDbMod.flushWorldDb = originals.flushWorldDb
+      agentServerMod.startAgentServer = originals.startAgentServer
+      agentServerMod.stopAgentServer = originals.stopAgentServer
+      agentServerMod.setSelfMeta = originals.setSelfMeta
+      agentServerMod.handleUdpMessage = originals.handleUdpMessage
+      agentClientMod.getAgentPingInfo = originals.getAgentPingInfo
+      agentClientMod.sendP2PMessage = originals.sendP2PMessage
+      agentClientMod.broadcastLeave = originals.broadcastLeave
       channelMod.wireInboundToGateway = originals.wireInboundToGateway
       transportMod.TransportManager = originals.TransportManager
       transportQuicMod.UDPTransport = originals.UDPTransport
@@ -295,18 +338,18 @@ describe("plugin lifecycle", () => {
       const joinCall = harness.sendCalls.find((call) => call.event === "world.join")
       assert.equal(joinCall?.targetAddr, "203.0.113.10")
 
-      const worldPeer = harness.peers.get(worldAgentId)
-      assert.ok(worldPeer)
-      assert.deepEqual(worldPeer.endpoints, [
+      const worldRecord = harness.worlds.get(worldAgentId)
+      assert.ok(worldRecord)
+      assert.deepEqual(worldRecord.endpoints, [
         { transport: "tcp", address: "203.0.113.10", port: 9000, priority: 1, ttl: 3600 },
       ])
-      assert.deepEqual(worldPeer.capabilities, ["world:arena"])
+      assert.equal(worldRecord.slug, "arena")
 
       await harness.service.stop()
 
       const leaveCall = harness.sendCalls.find((call) => call.event === "world.leave")
       assert.equal(leaveCall?.targetAddr, "203.0.113.10")
-      assert.deepEqual(leaveCall?.opts?.endpoints, worldPeer.endpoints)
+      assert.deepEqual(leaveCall?.opts?.endpoints, undefined)
     } finally {
       harness.restore()
     }
@@ -332,21 +375,19 @@ describe("plugin lifecycle", () => {
             ok: true,
             status: 200,
             json: async () => ({
-              worlds: [{ worldId: "arena", agentId: worldAgentId, name: "Arena", endpoints: [worldEndpoint] }],
+              worlds: [{ worldId: worldAgentId, slug: "arena", endpoints: [worldEndpoint] }],
             }),
           }
         }
-        if (requestUrl.endsWith("/worlds/arena")) {
+        if (requestUrl.endsWith(`/worlds/${encodeURIComponent(worldAgentId)}`)) {
           return {
             ok: true,
             status: 200,
             json: async () => ({
-              world: {
-                agentId: worldAgentId,
-                name: "Arena",
-                publicKey: worldPublicKey,
-                endpoints: [worldEndpoint],
-              },
+              worldId: worldAgentId,
+              slug: "arena",
+              publicKey: worldPublicKey,
+              endpoints: [worldEndpoint],
             }),
           }
         }
@@ -361,9 +402,9 @@ describe("plugin lifecycle", () => {
       const listed = await listWorlds.execute("tool-list", {})
       assert.equal(listed.isError, undefined)
 
-      const discoveredPeer = harness.peers.get(worldAgentId)
-      assert.ok(discoveredPeer, "peer should be discovered after list_worlds")
-      assert.deepEqual(discoveredPeer.endpoints, [worldEndpoint], "endpoints should be populated from /worlds")
+      const discoveredWorld = harness.worlds.get(worldAgentId)
+      assert.ok(discoveredWorld, "world should be discovered after list_worlds")
+      assert.deepEqual(discoveredWorld.endpoints, [worldEndpoint], "endpoints should be populated from /worlds")
 
       const joinWorld = harness.tools.get("join_world")
       const joined = await joinWorld.execute("tool-join", { world_id: "arena" })
@@ -371,12 +412,12 @@ describe("plugin lifecycle", () => {
 
       const joinCall = harness.sendCalls.find((call) => call.event === "world.join")
       assert.equal(joinCall?.targetAddr, "203.0.113.10")
-      assert.ok(harness.fetchCalls.some(([requestUrl]) => String(requestUrl).endsWith("/worlds/arena")))
+      assert.ok(harness.fetchCalls.some(([requestUrl]) => String(requestUrl).endsWith(`/worlds/${encodeURIComponent(worldAgentId)}`)))
 
-      const worldPeer = harness.peers.get(worldAgentId)
-      assert.ok(worldPeer)
-      assert.equal(worldPeer.publicKey, worldPublicKey)
-      assert.deepEqual(worldPeer.endpoints, [worldEndpoint])
+      const worldRecord = harness.worlds.get(worldAgentId)
+      assert.ok(worldRecord)
+      assert.equal(worldRecord.publicKey, worldPublicKey)
+      assert.deepEqual(worldRecord.endpoints, [worldEndpoint])
     } finally {
       harness.restore()
     }
@@ -420,12 +461,12 @@ describe("plugin lifecycle", () => {
       const result = await joinWorld.execute("tool-2", { address: "203.0.113.10:9000" })
 
       assert.equal(result.isError, undefined)
-      assert.ok(harness.peers.get("aw:sha256:member-1"))
+      assert.ok(harness.agents.get("aw:sha256:member-1"))
 
       await harness.runIntervals()
       assert.equal(refreshCalls, 1)
-      assert.equal(harness.peers.get("aw:sha256:member-1"), undefined)
-      assert.ok(harness.peers.get(worldAgentId))
+      assert.equal(harness.agents.get("aw:sha256:member-1"), undefined)
+      assert.ok(harness.worlds.get(worldAgentId))
 
       await harness.runIntervals()
       assert.equal(refreshCalls, 1)
@@ -472,16 +513,16 @@ describe("plugin lifecycle", () => {
       const result = await joinWorld.execute("tool-3", { address: "203.0.113.10:9000" })
 
       assert.equal(result.isError, undefined)
-      assert.equal(harness.peerServer.isCoMember("aw:sha256:member-1"), true)
+      assert.equal(harness.agentServer.isCoMember("aw:sha256:member-1"), true)
 
       await harness.runIntervals()
       await harness.runIntervals()
       assert.equal(refreshCalls, 2)
-      assert.equal(harness.peerServer.isCoMember("aw:sha256:member-1"), true)
+      assert.equal(harness.agentServer.isCoMember("aw:sha256:member-1"), true)
 
       await harness.runIntervals()
       assert.equal(refreshCalls, 3)
-      assert.equal(harness.peerServer.isCoMember("aw:sha256:member-1"), false)
+      assert.equal(harness.agentServer.isCoMember("aw:sha256:member-1"), false)
     } finally {
       harness.restore()
     }
@@ -577,10 +618,13 @@ describe("world_action tool", () => {
   })
 
   it("rejects ambiguous world_id when multiple worlds are joined", async () => {
-    const worldAgentId = "aw:sha256:world-host"
+    const worldByAddress = {
+      "203.0.113.10": "aw:sha256:world-host-1",
+      "203.0.113.11": "aw:sha256:world-host-2",
+    }
     let joinCount = 0
     const harness = createHarness({
-      pingInfo: { ok: true, data: { agentId: worldAgentId, publicKey: MOCK_WORLD_PUB } },
+      pingInfo: { ok: true, data: { agentId: worldByAddress["203.0.113.10"], publicKey: MOCK_WORLD_PUB } },
       joinResponse: {
         ok: true,
         data: {
@@ -592,9 +636,14 @@ describe("world_action tool", () => {
     })
 
     // Override sendP2PMessage to return different worldIds
-    const peerClientMod = createRequire(import.meta.url)("../dist/peer-client.js")
-    const origSend = peerClientMod.sendP2PMessage
-    peerClientMod.sendP2PMessage = async (_identity, targetAddr, event, content, port, timeoutMs, opts) => {
+    const agentClientMod = createRequire(import.meta.url)("../dist/agent-client.js")
+    const origPing = agentClientMod.getAgentPingInfo
+    const origSend = agentClientMod.sendP2PMessage
+    agentClientMod.getAgentPingInfo = async (targetAddr) => ({
+      ok: true,
+      data: { agentId: worldByAddress[targetAddr], publicKey: MOCK_WORLD_PUB },
+    })
+    agentClientMod.sendP2PMessage = async (_identity, targetAddr, event, content, port, timeoutMs, opts) => {
       harness.sendCalls.push({ targetAddr, event, content, port, timeoutMs, opts })
       if (event === "world.join") {
         joinCount++
@@ -615,7 +664,7 @@ describe("world_action tool", () => {
 
       const joinWorld = harness.tools.get("join_world")
       await joinWorld.execute("t-1", { address: "203.0.113.10:9000" })
-      await joinWorld.execute("t-2", { address: "203.0.113.10:9001" })
+      await joinWorld.execute("t-2", { address: "203.0.113.11:9001" })
 
       const worldAction = harness.tools.get("world_action")
       const result = await worldAction.execute("t-3", { action: "say" })
@@ -624,7 +673,8 @@ describe("world_action tool", () => {
       assert.ok(result.content[0].text.includes("Multiple worlds"))
       assert.ok(result.content[0].text.includes("Specify world_id"))
     } finally {
-      peerClientMod.sendP2PMessage = origSend
+      agentClientMod.getAgentPingInfo = origPing
+      agentClientMod.sendP2PMessage = origSend
       harness.restore()
     }
   })

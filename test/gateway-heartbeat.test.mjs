@@ -29,6 +29,19 @@ function signAnnounce(kp, worldId) {
   return { ...payload, signature }
 }
 
+function signAgentAnnounce(kp, capabilities = ["chat"]) {
+  const payload = {
+    from: kp.agentId,
+    publicKey: kp.publicKey,
+    alias: `Agent ${kp.agentId.slice(0, 8)}`,
+    endpoints: [{ transport: "tcp", address: "10.0.0.1", port: 8099, priority: 1 }],
+    capabilities,
+    timestamp: Date.now(),
+  }
+  const signature = signWithDomainSeparator(DOMAIN_SEPARATORS.ANNOUNCE, payload, kp.secretKey)
+  return { ...payload, signature }
+}
+
 function signHeartbeat(kp) {
   const ts = Date.now()
   const payload = { agentId: kp.agentId, ts }
@@ -71,7 +84,7 @@ describe("Gateway /agents/:agentId/heartbeat", () => {
     const kp = makeKeypair()
 
     // First announce so the agent exists
-    const ann = signAnnounce(kp, "hb-sig-test")
+    const ann = signAgentAnnounce(kp)
     const annResp = await app.inject({ method: "POST", url: "/agents", payload: ann })
     assert.equal(annResp.statusCode, 200)
 
@@ -118,12 +131,12 @@ describe("Gateway /agents/:agentId/heartbeat", () => {
     const kp = makeKeypair()
 
     // Announce
-    const ann = signAnnounce(kp, "hb-lastseen")
+    const ann = signAgentAnnounce(kp)
     await app.inject({ method: "POST", url: "/agents", payload: ann })
 
     // Record initial lastSeen
     const before = JSON.parse(
-      (await app.inject({ method: "GET", url: "/worlds/hb-lastseen" })).body
+      (await app.inject({ method: "GET", url: `/agents/${kp.agentId}` })).body
     )
     const initialLastSeen = before.lastSeen
 
@@ -139,7 +152,7 @@ describe("Gateway /agents/:agentId/heartbeat", () => {
 
     // Verify lastSeen updated
     const afterResp = JSON.parse(
-      (await app.inject({ method: "GET", url: "/worlds/hb-lastseen" })).body
+      (await app.inject({ method: "GET", url: `/agents/${kp.agentId}` })).body
     )
     assert.ok(afterResp.lastSeen >= initialLastSeen, "lastSeen should be updated after heartbeat")
   })
@@ -171,9 +184,8 @@ describe("Gateway /worlds/:worldId/heartbeat", () => {
 
   it("returns 403 for invalid signature", async () => {
     const kp = makeKeypair()
-    const worldId = "world-hb-sig-test"
-
-    const ann = signAnnounce(kp, worldId)
+    const worldId = kp.agentId
+    const ann = signAnnounce(kp, "world-hb-sig-test")
     const annResp = await app.inject({ method: "POST", url: "/agents", payload: ann })
     assert.equal(annResp.statusCode, 200)
 
@@ -192,9 +204,9 @@ describe("Gateway /worlds/:worldId/heartbeat", () => {
 
   it("updates lastSeen in registry", async () => {
     const kp = makeKeypair()
-    const worldId = "world-hb-lastseen"
+    const worldId = kp.agentId
 
-    const ann = signAnnounce(kp, worldId)
+    const ann = signAnnounce(kp, "world-hb-lastseen")
     await app.inject({ method: "POST", url: "/agents", payload: ann })
 
     const before = JSON.parse(
@@ -234,11 +246,11 @@ describe("Gateway stale TTL at 90s", () => {
 
   it("prunes agents after stale TTL", async () => {
     const kp = makeKeypair()
-    const ann = signAnnounce(kp, "ttl-test")
+    const ann = signAgentAnnounce(kp)
     await app.inject({ method: "POST", url: "/agents", payload: ann })
 
     // Agent should be visible
-    let resp = await app.inject({ method: "GET", url: "/worlds/ttl-test" })
+    let resp = await app.inject({ method: "GET", url: `/agents/${kp.agentId}` })
     assert.equal(resp.statusCode, 200)
 
     // Wait for TTL to expire
@@ -261,7 +273,7 @@ describe("Gateway stale TTL at 90s", () => {
 
     try {
       const kp = makeKeypair()
-      const ann = signAnnounce(kp, "keep-alive")
+      const ann = signAgentAnnounce(kp)
       await app2.inject({ method: "POST", url: "/agents", payload: ann })
 
       // Send heartbeat before TTL expires
@@ -274,8 +286,8 @@ describe("Gateway stale TTL at 90s", () => {
       await new Promise((r) => setTimeout(r, 50))
 
       // Agent should still be visible
-      const worldResp = await app2.inject({ method: "GET", url: "/worlds/keep-alive" })
-      assert.equal(worldResp.statusCode, 200, "Agent should still be visible after heartbeat")
+      const agentResp = await app2.inject({ method: "GET", url: `/agents/${kp.agentId}` })
+      assert.equal(agentResp.statusCode, 200, "Agent should still be visible after heartbeat")
     } finally {
       await stop2()
       fs.rmSync(tmpDir2, { recursive: true })

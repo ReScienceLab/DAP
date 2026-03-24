@@ -6,12 +6,20 @@ export interface Endpoint {
   ttl?: number
 }
 
-export interface PeerRecord {
+export interface AgentRecord {
   agentId: string
   publicKey: string
   alias: string
   endpoints: Endpoint[]
   capabilities: string[]
+  lastSeen: number
+}
+
+export interface WorldRecord {
+  worldId: string
+  slug: string
+  publicKey: string
+  endpoints: Endpoint[]
   lastSeen: number
 }
 

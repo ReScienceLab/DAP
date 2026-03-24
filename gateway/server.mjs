@@ -83,8 +83,10 @@ export async function createGatewayApp(opts = {}) {
     webhookUrl = WEBHOOK_URL,
   } = opts
 
-  const REGISTRY_PATH = path.join(dataDir, "registry.json")
-  const REGISTRY_TMP_PATH = `${REGISTRY_PATH}.tmp`
+  const AGENT_REGISTRY_PATH = path.join(dataDir, "agents-registry.json")
+  const AGENT_REGISTRY_TMP_PATH = `${AGENT_REGISTRY_PATH}.tmp`
+  const WORLD_REGISTRY_PATH = path.join(dataDir, "worlds-registry.json")
+  const WORLD_REGISTRY_TMP_PATH = `${WORLD_REGISTRY_PATH}.tmp`
 
   // ---------------------------------------------------------------------------
   // Identity
@@ -98,63 +100,81 @@ export async function createGatewayApp(opts = {}) {
   // Registry
   // ---------------------------------------------------------------------------
 
-  const registry = new Map() // agentId -> PeerRecord
+  const agentRegistry = new Map() // agentId -> AgentRecord
+  const worldRegistry = new Map() // worldId -> WorldRecord
   let _saveTimer = null
   let _tickTimer = null
   let _shutdownPromise = null
   let _registryModifiedAt = null
 
-  function writeRegistry() {
+  function writeRegistries() {
     fs.mkdirSync(dataDir, { recursive: true })
-    const payload = {
+    const agentPayload = {
       version: REGISTRY_VERSION,
       savedAt: Date.now(),
-      agents: Object.fromEntries([...registry.entries()]),
+      agents: Object.fromEntries([...agentRegistry.entries()]),
     }
-    fs.writeFileSync(REGISTRY_TMP_PATH, JSON.stringify(payload, null, 2))
-    fs.renameSync(REGISTRY_TMP_PATH, REGISTRY_PATH)
+    fs.writeFileSync(AGENT_REGISTRY_TMP_PATH, JSON.stringify(agentPayload, null, 2))
+    fs.renameSync(AGENT_REGISTRY_TMP_PATH, AGENT_REGISTRY_PATH)
+
+    const worldPayload = {
+      version: REGISTRY_VERSION,
+      savedAt: Date.now(),
+      worlds: Object.fromEntries([...worldRegistry.entries()]),
+    }
+    fs.writeFileSync(WORLD_REGISTRY_TMP_PATH, JSON.stringify(worldPayload, null, 2))
+    fs.renameSync(WORLD_REGISTRY_TMP_PATH, WORLD_REGISTRY_PATH)
   }
 
-  function loadRegistry() {
-    if (!fs.existsSync(REGISTRY_PATH)) {
-      console.warn(`[gateway] Registry file missing at ${REGISTRY_PATH}; starting with empty registry`)
-      registry.clear()
-      _registryModifiedAt = null
-      return
+  function loadRegistryFile(filePath, key, targetRegistry) {
+    if (!fs.existsSync(filePath)) {
+      targetRegistry.clear()
+      return { loaded: 0, discarded: 0, savedAt: null }
     }
 
+    const raw = JSON.parse(fs.readFileSync(filePath, "utf8"))
+    if (raw?.version !== REGISTRY_VERSION || !raw?.[key] || typeof raw[key] !== "object") {
+      throw new Error(`invalid ${key} registry schema`)
+    }
+
+    targetRegistry.clear()
+    const cutoff = Date.now() - staleTtlMs
+    let loaded = 0
+    let discarded = 0
+
+    for (const [id, record] of Object.entries(raw[key])) {
+      if (!record || typeof record !== "object") {
+        discarded++
+        continue
+      }
+      const lastSeen = typeof record.lastSeen === "number" ? record.lastSeen : 0
+      if (lastSeen < cutoff) {
+        discarded++
+        continue
+      }
+      targetRegistry.set(id, record)
+      loaded++
+    }
+
+    return {
+      loaded,
+      discarded,
+      savedAt: typeof raw.savedAt === "number" ? raw.savedAt : null,
+    }
+  }
+
+  function loadRegistries() {
     try {
-      const raw = JSON.parse(fs.readFileSync(REGISTRY_PATH, "utf8"))
-      if (raw?.version !== REGISTRY_VERSION || !raw?.agents || typeof raw.agents !== "object") {
-        throw new Error("invalid registry schema")
-      }
-
-      registry.clear()
-      const cutoff = Date.now() - staleTtlMs
-      let loaded = 0
-      let discarded = 0
-
-      for (const [agentId, record] of Object.entries(raw.agents)) {
-        if (!record || typeof record !== "object") {
-          discarded++
-          continue
-        }
-        const lastSeen = typeof record.lastSeen === "number" ? record.lastSeen : 0
-        if (lastSeen < cutoff) {
-          discarded++
-          continue
-        }
-        registry.set(agentId, record)
-        loaded++
-      }
-
-      _registryModifiedAt = loaded > 0
-        ? (typeof raw.savedAt === "number" ? raw.savedAt : Date.now())
-        : null
-      console.log(`[gateway] Loaded ${loaded} agents from registry (discarded ${discarded} stale)`)
+      const agents = loadRegistryFile(AGENT_REGISTRY_PATH, "agents", agentRegistry)
+      const worlds = loadRegistryFile(WORLD_REGISTRY_PATH, "worlds", worldRegistry)
+      const timestamps = [agents.savedAt, worlds.savedAt].filter((value) => typeof value === "number")
+      _registryModifiedAt = timestamps.length > 0 ? Math.max(...timestamps) : null
+      console.log(`[gateway] Loaded ${agents.loaded} agents from registry (discarded ${agents.discarded} stale)`)
+      console.log(`[gateway] Loaded ${worlds.loaded} worlds from registry (discarded ${worlds.discarded} stale)`)
     } catch (error) {
-      console.warn(`[gateway] Failed to load registry from ${REGISTRY_PATH}; starting with empty registry`, error)
-      registry.clear()
+      console.warn("[gateway] Failed to load registry files; starting with empty registries", error)
+      agentRegistry.clear()
+      worldRegistry.clear()
       _registryModifiedAt = null
     }
   }
@@ -164,9 +184,9 @@ export async function createGatewayApp(opts = {}) {
     _saveTimer = setTimeout(() => {
       _saveTimer = null
       try {
-        writeRegistry()
+        writeRegistries()
       } catch (error) {
-        console.warn(`[gateway] Failed to save registry to ${REGISTRY_PATH}`, error)
+        console.warn("[gateway] Failed to save registry files", error)
       }
     }, SAVE_DEBOUNCE_MS)
   }
@@ -178,16 +198,16 @@ export async function createGatewayApp(opts = {}) {
     }
 
     try {
-      writeRegistry()
+      writeRegistries()
     } catch (error) {
-      console.warn(`[gateway] Failed to flush registry to ${REGISTRY_PATH}`, error)
+      console.warn("[gateway] Failed to flush registry files", error)
     }
   }
 
   function upsertAgent(agentId, publicKey, opts = {}) {
     const persist = opts.persist === true
     const now = Date.now()
-    const existing = registry.get(agentId)
+    const existing = agentRegistry.get(agentId)
     const firstSeen = existing === undefined
     const lastSeen = opts.lastSeen
       ? Math.max(existing?.lastSeen ?? 0, opts.lastSeen)
@@ -201,11 +221,11 @@ export async function createGatewayApp(opts = {}) {
       lastSeen,
     }
     const changed = JSON.stringify(existing ?? null) !== JSON.stringify(nextRecord)
-    registry.set(agentId, nextRecord)
+    agentRegistry.set(agentId, nextRecord)
     let trimmed = false
-    if (registry.size > MAX_AGENTS) {
-      const oldest = [...registry.values()].sort((a, b) => a.lastSeen - b.lastSeen)[0]
-      registry.delete(oldest.agentId)
+    if (agentRegistry.size > MAX_AGENTS) {
+      const oldest = [...agentRegistry.values()].sort((a, b) => a.lastSeen - b.lastSeen)[0]
+      agentRegistry.delete(oldest.agentId)
       trimmed = true
     }
     if (changed || trimmed) {
@@ -215,13 +235,39 @@ export async function createGatewayApp(opts = {}) {
       saveRegistry()
     }
     if (firstSeen && webhookUrl) {
-      const caps = nextRecord.capabilities ?? []
-      const worldCap = caps.find((c) => c.startsWith("world:"))
-      const worldId = worldCap ? worldCap.slice("world:".length) : undefined
       fetch(webhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ event: "world.announced", agentId, worldId, ts: Date.now() }),
+        body: JSON.stringify({ event: "agent.announced", agentId, ts: Date.now() }),
+        signal: AbortSignal.timeout(5_000),
+      }).catch(() => {})
+    }
+  }
+
+  function upsertWorld(worldId, publicKey, opts = {}) {
+    const persist = opts.persist === true
+    const now = Date.now()
+    const existing = worldRegistry.get(worldId)
+    const firstSeen = existing === undefined
+    const lastSeen = opts.lastSeen
+      ? Math.max(existing?.lastSeen ?? 0, opts.lastSeen)
+      : now
+    const nextRecord = {
+      worldId,
+      slug: opts.slug ?? existing?.slug ?? worldId,
+      publicKey: publicKey || existing?.publicKey || "",
+      endpoints: opts.endpoints ?? existing?.endpoints ?? [],
+      lastSeen,
+    }
+    const changed = JSON.stringify(existing ?? null) !== JSON.stringify(nextRecord)
+    worldRegistry.set(worldId, nextRecord)
+    if (changed) _registryModifiedAt = now
+    if (persist && changed) saveRegistry()
+    if (firstSeen && webhookUrl) {
+      fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event: "world.announced", worldId, slug: nextRecord.slug, ts: Date.now() }),
         signal: AbortSignal.timeout(5_000),
       }).catch(() => {})
     }
@@ -230,8 +276,8 @@ export async function createGatewayApp(opts = {}) {
   function pruneStaleAgents(ttl = staleTtlMs) {
     const cutoff = Date.now() - ttl
     let pruned = 0
-    for (const [id, p] of registry) {
-      if (p.lastSeen < cutoff) { registry.delete(id); pruned++ }
+    for (const [id, p] of agentRegistry) {
+      if (p.lastSeen < cutoff) { agentRegistry.delete(id); pruned++ }
     }
     if (pruned > 0) {
       console.log(`[gateway] Pruned ${pruned} stale agent(s) (TTL ${ttl / 1000}s)`)
@@ -239,8 +285,20 @@ export async function createGatewayApp(opts = {}) {
     }
   }
 
+  function pruneStaleWorlds(ttl = staleTtlMs) {
+    const cutoff = Date.now() - ttl
+    let pruned = 0
+    for (const [id, world] of worldRegistry) {
+      if (world.lastSeen < cutoff) { worldRegistry.delete(id); pruned++ }
+    }
+    if (pruned > 0) {
+      console.log(`[gateway] Pruned ${pruned} stale world(s) (TTL ${ttl / 1000}s)`)
+      flushRegistry()
+    }
+  }
+
   function getAgentsForExchange(limit = 50) {
-    return [...registry.values()]
+    return [...agentRegistry.values()]
       .sort((a, b) => b.lastSeen - a.lastSeen)
       .slice(0, limit)
       .map(({ agentId, publicKey, alias, endpoints, capabilities, lastSeen }) => ({
@@ -248,11 +306,13 @@ export async function createGatewayApp(opts = {}) {
       }))
   }
 
-  function findByCapability(cap) {
-    const isPrefix = cap.endsWith(":");
-    return [...registry.values()].filter((p) =>
-      p.capabilities?.some((c) => isPrefix ? c.startsWith(cap) : c === cap)
-    ).sort((a, b) => b.lastSeen - a.lastSeen);
+  function listWorlds() {
+    return [...worldRegistry.values()]
+      .sort((a, b) => b.lastSeen - a.lastSeen)
+  }
+
+  function getWorld(worldId) {
+    return worldRegistry.get(worldId)
   }
 
   // ---------------------------------------------------------------------------
@@ -286,7 +346,7 @@ export async function createGatewayApp(opts = {}) {
   // ---------------------------------------------------------------------------
 
   async function sendToWorld(worldId, event, content) {
-    const world = findByCapability(`world:${worldId}`)[0];
+    const world = getWorld(worldId);
     if (!world?.endpoints?.length) {
       console.warn(`[gateway] No reachable endpoints for world:${worldId}`);
       return { ok: false, error: "World agent not reachable" };
@@ -379,8 +439,8 @@ export async function createGatewayApp(opts = {}) {
     },
   }, async () => {
     const ts = Date.now()
-    const worlds = findByCapability("world:").length
-    const agents = registry.size
+    const worlds = worldRegistry.size
+    const agents = agentRegistry.size
     const registryAge = agents > 0 && _registryModifiedAt !== null
       ? Math.max(0, ts - _registryModifiedAt)
       : null
@@ -449,7 +509,7 @@ export async function createGatewayApp(opts = {}) {
         200: {
           type: "object",
           required: ["agents"],
-          properties: { agents: { type: "array", items: { $ref: "PeerRecord#" } } },
+          properties: { agents: { type: "array", items: { $ref: "AgentRecord#" } } },
         },
       },
     },
@@ -471,20 +531,14 @@ export async function createGatewayApp(opts = {}) {
       },
     },
   }, async () => {
-    const worlds = findByCapability("world:");
     return {
-      worlds: worlds.map((w) => {
-        const cap = w.capabilities.find((c) => c.startsWith("world:")) ?? "";
-        const worldId = cap.slice("world:".length);
-        return {
-          worldId,
-          agentId: w.agentId,
-          name: w.alias || worldId,
-          endpoints: w.endpoints ?? [],
-          reachable: w.endpoints?.length > 0,
-          lastSeen: w.lastSeen,
-        };
-      }),
+      worlds: listWorlds().map((world) => ({
+        worldId: world.worldId,
+        slug: world.slug,
+        endpoints: world.endpoints ?? [],
+        reachable: world.endpoints?.length > 0,
+        lastSeen: world.lastSeen,
+      })),
     };
   });
 
@@ -505,18 +559,16 @@ export async function createGatewayApp(opts = {}) {
     },
   }, async (req, reply) => {
     const { worldId } = req.params;
-    const worlds = findByCapability(`world:${worldId}`);
-    if (!worlds.length) return reply.code(404).send({ error: "World not found" });
-    const w = worlds[0];
+    const world = getWorld(worldId);
+    if (!world) return reply.code(404).send({ error: "World not found" });
     return {
       worldId,
-      agentId: w.agentId,
-      publicKey: w.publicKey,
-      name: w.alias || worldId,
-      endpoints: w.endpoints,
-      reachable: w.endpoints?.length > 0,
+      slug: world.slug,
+      publicKey: world.publicKey,
+      endpoints: world.endpoints,
+      reachable: world.endpoints?.length > 0,
       subscribers: worldSubs.get(worldId)?.size ?? 0,
-      lastSeen: w.lastSeen,
+      lastSeen: world.lastSeen,
     };
   });
 
@@ -549,17 +601,12 @@ export async function createGatewayApp(opts = {}) {
       }
     }
     const { worldId } = req.params;
-    const worlds = findByCapability(`world:${worldId}`);
-    if (!worlds.length) return reply.code(404).send({ error: "World not found" });
-    let removed = 0;
-    for (const w of worlds) {
-      registry.delete(w.agentId);
-      removed++;
-    }
+    if (!worldRegistry.has(worldId)) return reply.code(404).send({ error: "World not found" });
+    worldRegistry.delete(worldId);
     _registryModifiedAt = Date.now();
     flushRegistry();
-    console.log(`[gateway] Deregistered world:${worldId} (${removed} agent(s) removed)`);
-    return { ok: true, removed };
+    console.log(`[gateway] Deregistered world:${worldId}`);
+    return { ok: true, removed: 1 };
   });
 
   app.get("/agents/:agentId", {
@@ -573,13 +620,13 @@ export async function createGatewayApp(opts = {}) {
         properties: { agentId: { type: "string" } },
       },
       response: {
-        200: { $ref: "PeerRecord#" },
+        200: { $ref: "AgentRecord#" },
         404: { $ref: "Error#" },
       },
     },
   }, async (req, reply) => {
     const { agentId } = req.params;
-    const agent = registry.get(agentId);
+    const agent = agentRegistry.get(agentId);
     if (!agent) return reply.code(404).send({ error: "Agent not found" });
     return agent;
   });
@@ -613,8 +660,8 @@ export async function createGatewayApp(opts = {}) {
       }
     }
     const { agentId } = req.params;
-    if (!registry.has(agentId)) return reply.code(404).send({ error: "Agent not found" });
-    registry.delete(agentId);
+    if (!agentRegistry.has(agentId)) return reply.code(404).send({ error: "Agent not found" });
+    agentRegistry.delete(agentId);
     _registryModifiedAt = Date.now();
     flushRegistry();
     console.log(`[gateway] Deregistered agent:${agentId}`);
@@ -713,10 +760,10 @@ export async function createGatewayApp(opts = {}) {
         response: {
           200: {
             type: "object",
-            required: ["ok", "peers"],
+            required: ["ok", "agents"],
             properties: {
               ok: { type: "boolean" },
-              peers: { type: "array", items: { $ref: "PeerRecord#" } },
+              agents: { type: "array", items: { $ref: "AgentRecord#" } },
             },
           },
           400: { $ref: "Error#" },
@@ -743,10 +790,25 @@ export async function createGatewayApp(opts = {}) {
       if (agentIdFromPublicKey(ann.publicKey) !== ann.from) {
         return reply.code(400).send({ error: "agentId mismatch" });
       }
-      upsertAgent(ann.from, ann.publicKey, {
-        alias: ann.alias, endpoints: ann.endpoints, capabilities: ann.capabilities, persist: true,
-      });
-      return { ok: true, peers: getAgentsForExchange(20) };
+      const worldCap = Array.isArray(ann.capabilities)
+        ? ann.capabilities.find((cap) => typeof cap === "string" && cap.startsWith("world:"))
+        : undefined
+      if (worldCap) {
+        const protocolWorldId = agentIdFromPublicKey(ann.publicKey)
+        upsertWorld(protocolWorldId, ann.publicKey, {
+          slug: typeof ann.slug === "string" && ann.slug.length > 0
+            ? ann.slug
+            : worldCap.slice("world:".length) || ann.alias || protocolWorldId,
+          endpoints: ann.endpoints,
+          lastSeen: ann.timestamp,
+          persist: true,
+        })
+      } else {
+        upsertAgent(ann.from, ann.publicKey, {
+          alias: ann.alias, endpoints: ann.endpoints, capabilities: ann.capabilities, persist: true,
+        });
+      }
+      return { ok: true, agents: getAgentsForExchange(20) };
     });
 
     peer.post("/agents/:agentId/heartbeat", {
@@ -776,7 +838,7 @@ export async function createGatewayApp(opts = {}) {
       const skew = Math.abs(Date.now() - ts);
       if (skew > 5 * 60 * 1000) return reply.code(400).send({ error: "Timestamp out of range" });
 
-      const existing = registry.get(agentId);
+      const existing = agentRegistry.get(agentId);
       if (!existing) return reply.code(404).send({ error: "Unknown agent" });
 
       const ok = verifyWithDomainSeparator(
@@ -819,9 +881,8 @@ export async function createGatewayApp(opts = {}) {
       const skew = Math.abs(Date.now() - ts);
       if (skew > 5 * 60 * 1000) return reply.code(400).send({ error: "Timestamp out of range" });
 
-      const worlds = findByCapability(`world:${worldId}`);
-      if (!worlds.length) return reply.code(404).send({ error: "World not found" });
-      const existing = worlds[0];
+      const existing = worldRegistry.get(worldId);
+      if (!existing) return reply.code(404).send({ error: "World not found" });
 
       const ok = verifyWithDomainSeparator(
         DOMAIN_SEPARATORS.HEARTBEAT,
@@ -900,14 +961,15 @@ export async function createGatewayApp(opts = {}) {
   }
 
   async function start() {
-    loadRegistry()
+    loadRegistries()
     await app.listen({ port: httpPort, host: "::" })
     console.log(`[gateway] agentId=${selfAgentId}`)
     console.log(`[gateway] HTTP on [::]:${httpPort}`)
     _tickTimer = setInterval(() => {
       pruneStaleAgents()
+      pruneStaleWorlds()
       if (_registryModifiedAt !== null) {
-        try { writeRegistry() } catch (error) {
+        try { writeRegistries() } catch (error) {
           console.warn("[gateway] Periodic snapshot failed", error)
         }
       }

@@ -1,25 +1,26 @@
 /**
  * AWN — Agent World Network — OpenClaw plugin entry point.
  *
- * Agent ID (sha256(publicKey)[:16]) is the primary peer identifier.
+ * Agent ID (sha256(publicKey)[:16]) is the primary agent identifier.
  * Transport is plain HTTP over TCP; QUIC is available as a fast optional transport.
  */
 import * as os from "os"
 import * as path from "path"
 import { execSync } from "child_process"
-import { loadOrCreateIdentity, deriveDidKey, verifyHttpResponseHeaders } from "./identity"
-import { initDb, listPeers, getPeer, flushDb, getPeerIds, getEndpointAddress, setTofuTtl, findPeersByCapability, removePeer } from "./peer-db"
-import { startPeerServer, stopPeerServer, setSelfMeta, handleUdpMessage, addWorldMembers, setWorldMembers, removeWorld, clearWorldMembers } from "./peer-server"
-import { sendP2PMessage, pingPeer, broadcastLeave, SendOptions, getPeerPingInfo } from "./peer-client"
-import { upsertDiscoveredPeer } from "./peer-db"
+import { loadOrCreateIdentity, deriveDidKey, verifyHttpResponseHeaders, agentIdFromPublicKey } from "./identity"
+import { initDb, listAgents, getAgent, flushDb, getAgentIds, setTofuTtl, removeAgent, findAgentsByCapability } from "./agent-db"
+import { initWorldDb, listWorlds, getWorld, getWorldBySlug, upsertWorld, flushWorldDb } from "./world-db"
+import { startAgentServer, stopAgentServer, setSelfMeta, handleUdpMessage, addWorldMembers, setWorldMembers, removeWorld, clearWorldMembers } from "./agent-server"
+import { sendP2PMessage, pingAgent, broadcastLeave, SendOptions, getAgentPingInfo } from "./agent-client"
+import { upsertDiscoveredAgent } from "./agent-db"
 import { buildChannel, wireInboundToGateway, CHANNEL_CONFIG_SCHEMA } from "./channel"
-import { Identity, PluginConfig, Endpoint } from "./types"
+import { Identity, PluginConfig, Endpoint, DiscoveredWorldRecord } from "./types"
 import { TransportManager } from "./transport"
 import { UDPTransport } from "./transport-quic"
 import { parseDirectPeerAddress } from "./address"
 
 const AWN_TOOLS = [
-  "awn_list_peers",
+  "awn_list_agents",
   "awn_send_message", "awn_status",
   "list_worlds", "join_world", "world_action", "world_info",
 ]
@@ -89,6 +90,7 @@ interface ActionSchema {
 // Track joined worlds for periodic member refresh
 interface JoinedWorldInfo {
   agentId: string
+  slug?: string
   address: string
   port: number
   publicKey: string
@@ -163,8 +165,8 @@ function untrackWorldScopedPeer(agentId: string, worldId: string): void {
   if (worldIds.size > 0) return
 
   _worldScopedPeerWorlds.delete(agentId)
-  if (getPeer(agentId)?.source !== "manual") {
-    removePeer(agentId)
+  if (getAgent(agentId)?.source !== "manual") {
+    removeAgent(agentId)
   }
 }
 
@@ -180,9 +182,9 @@ function syncWorldMembers(
 
     nextMemberIds.add(member.agentId)
 
-    const existingPeer = getPeer(member.agentId)
-    if (!existingPeer || existingPeer.source !== "manual") {
-      upsertDiscoveredPeer(member.agentId, "", {
+    const existingAgent = getAgent(member.agentId)
+    if (!existingAgent || existingAgent.source !== "manual") {
+      upsertDiscoveredAgent(member.agentId, "", {
         alias: member.alias,
         endpoints: member.endpoints,
         source: "gossip",
@@ -304,7 +306,7 @@ async function leaveJoinedWorlds(): Promise<void> {
 }
 
 function buildSendOpts(peerIdOrAddr?: string): SendOptions {
-  const peer = peerIdOrAddr ? getPeer(peerIdOrAddr) : null
+  const peer = peerIdOrAddr ? getAgent(peerIdOrAddr) : null
   return {
     endpoints: peer?.endpoints,
     quicTransport: _quicTransport?.isActive() ? _quicTransport : undefined,
@@ -317,8 +319,8 @@ function getGatewayUrl(): string {
 }
 
 async function fetchGatewayWorldRecord(worldId: string): Promise<{
-  agentId?: string
-  alias?: string
+  worldId?: string
+  slug?: string
   endpoints?: Endpoint[]
   publicKey?: string
 } | null> {
@@ -346,25 +348,64 @@ async function fetchGatewayWorldRecord(worldId: string): Promise<{
       : typeof host?.publicKey === "string"
         ? host.publicKey
         : undefined
-    const agentId = typeof detail.agentId === "string"
-      ? detail.agentId
-      : typeof host?.agentId === "string"
-        ? host.agentId
-        : undefined
-    const alias = typeof detail.name === "string"
-      ? detail.name
+    const protocolWorldId = typeof detail.worldId === "string"
+      ? detail.worldId
+      : undefined
+    const slug = typeof detail.slug === "string"
+      ? detail.slug
       : typeof detail.alias === "string"
         ? detail.alias
-        : typeof host?.name === "string"
-          ? host.name
-          : typeof host?.alias === "string"
-            ? host.alias
-            : undefined
+        : typeof detail.name === "string"
+          ? detail.name
+          : undefined
 
-    return { agentId, alias, endpoints, publicKey }
+    return { worldId: protocolWorldId, slug, endpoints, publicKey }
   } catch {
     return null
   }
+}
+
+async function syncWorldsFromGateway(): Promise<DiscoveredWorldRecord[]> {
+  const gatewayWorlds: DiscoveredWorldRecord[] = []
+  try {
+    const resp = await fetch(`${getGatewayUrl()}/worlds`, { signal: AbortSignal.timeout(10_000) })
+    if (!resp.ok) return gatewayWorlds
+
+    const data = await resp.json() as {
+      worlds?: Array<{ worldId: string; slug?: string; endpoints?: Endpoint[]; publicKey?: string; lastSeen?: number }>
+    }
+
+    for (const world of data.worlds ?? []) {
+      if (!world.worldId || gatewayWorlds.some((item) => item.worldId === world.worldId)) continue
+      const nextWorld: DiscoveredWorldRecord = {
+        worldId: world.worldId,
+        slug: world.slug ?? world.worldId,
+        publicKey: world.publicKey ?? "",
+        endpoints: world.endpoints ?? [],
+        lastSeen: world.lastSeen ?? Date.now(),
+        source: "gateway",
+      }
+      gatewayWorlds.push(nextWorld)
+      upsertWorld(nextWorld.worldId, nextWorld)
+    }
+  } catch { /* gateway unreachable */ }
+  return gatewayWorlds
+}
+
+function resolveKnownWorld(identifier: string | undefined): DiscoveredWorldRecord | null {
+  if (!identifier) return null
+  return getWorld(identifier) ?? getWorldBySlug(identifier)
+}
+
+function resolveJoinedWorld(identifier: string | undefined): [string, JoinedWorldInfo] | null {
+  if (!identifier) return null
+  const direct = _joinedWorlds.get(identifier)
+  if (direct) return [identifier, direct]
+
+  for (const [worldId, info] of _joinedWorlds) {
+    if (info.slug === identifier) return [worldId, info]
+  }
+  return null
 }
 
 export default function register(api: any) {
@@ -385,6 +426,7 @@ export default function register(api: any) {
       const isFirstRun = !require("fs").existsSync(path.join(dataDir, "identity.json"))
       identity = loadOrCreateIdentity(dataDir)
       initDb(dataDir)
+      initWorldDb(dataDir)
       if (cfg.tofu_ttl_days !== undefined) setTofuTtl(cfg.tofu_ttl_days)
 
       console.log(`[awn] Agent ID:  ${identity.agentId}`)
@@ -429,7 +471,7 @@ export default function register(api: any) {
       }
       _agentMeta.endpoints = advertisedEndpoints
 
-      await startPeerServer(peerPort, { identity })
+      await startAgentServer(peerPort, { identity })
 
       setSelfMeta({
         agentId: identity.agentId,
@@ -450,7 +492,7 @@ export default function register(api: any) {
           "",
           "Quick start:",
           "  openclaw awn status     — show your agent ID",
-          "  openclaw join_world <id> — join a world to discover peers",
+          "  openclaw join_world <worldId|slug> — join a world to discover agents",
         ]
         _welcomeTimer = setTimeout(() => {
           _welcomeTimer = null
@@ -465,7 +507,7 @@ export default function register(api: any) {
         }, 2000)
       }
 
-      console.log(`[awn] Ready — join a world to discover peers`)
+      console.log(`[awn] Ready — join a world to discover agents`)
     },
 
     stop: async () => {
@@ -485,10 +527,11 @@ export default function register(api: any) {
       clearWorldMembers()
       _worldRefreshFailures.clear()
       if (identity) {
-        await broadcastLeave(identity, listPeers(), peerPort, buildSendOpts())
+        await broadcastLeave(identity, listAgents(), peerPort, buildSendOpts())
       }
       flushDb()
-      await stopPeerServer()
+      flushWorldDb()
+      await stopAgentServer()
       if (_transportManager) {
         await _transportManager.stop()
         _transportManager = null
@@ -514,9 +557,9 @@ export default function register(api: any) {
         capabilities: { chatTypes: ["direct"] },
         configSchema: CHANNEL_CONFIG_SCHEMA,
         config: {
-          listAccountIds: () => (identity ? getPeerIds() : []),
+          listAccountIds: () => (identity ? getAgentIds() : []),
           resolveAccount: (_: unknown, accountId: string | undefined) => {
-            const peer = accountId ? getPeer(accountId) : null
+            const peer = accountId ? getAgent(accountId) : null
             return {
               accountId: accountId ?? "",
               agentId: peer?.agentId ?? accountId ?? "",
@@ -558,43 +601,43 @@ export default function register(api: any) {
           if (_quicTransport?.isActive()) {
             console.log(`QUIC endpoint:  ${_quicTransport.address}`)
           }
-          console.log(`Peer port:      ${peerPort}`)
-          console.log(`Known peers:    ${listPeers().length}`)
+          console.log(`Listen port:      ${peerPort}`)
+          console.log(`Known agents:    ${listAgents().length}`)
           console.log(`Worlds joined:  ${_joinedWorlds.size}`)
         })
 
       awn
-        .command("peers")
-        .description("List known peers")
+        .command("agents")
+        .description("List known agents")
         .action(() => {
-          const peers = listPeers()
-          if (peers.length === 0) {
-            console.log("No peers yet. Use 'openclaw awn add <agent-id>' to add one.")
+          const agents = listAgents()
+          if (agents.length === 0) {
+            console.log("No agents yet. Use 'openclaw awn add <agent-id>' to add one.")
             return
           }
-          console.log("=== Known Peers ===")
-          for (const peer of peers) {
-            const ago = Math.round((Date.now() - peer.lastSeen) / 1000)
-            const label = peer.alias ? ` — ${peer.alias}` : ""
-            const ver = peer.version ? ` [v${peer.version}]` : ""
-            const transports = peer.endpoints?.map((e) => e.transport).join(",") || "none"
-            console.log(`  ${peer.agentId}${label}${ver}  [${transports}]  last seen ${ago}s ago`)
+          console.log("=== Known Agents ===")
+          for (const agent of agents) {
+            const ago = Math.round((Date.now() - agent.lastSeen) / 1000)
+            const label = agent.alias ? ` — ${agent.alias}` : ""
+            const ver = agent.version ? ` [v${agent.version}]` : ""
+            const transports = agent.endpoints?.map((e) => e.transport).join(",") || "none"
+            console.log(`  ${agent.agentId}${label}${ver}  [${transports}]  last seen ${ago}s ago`)
           }
         })
 
       awn
         .command("ping <agentId>")
-        .description("Check if a peer is reachable")
+        .description("Check if an agent is reachable")
         .action(async (agentId: string) => {
           console.log(`Pinging ${agentId}...`)
-          const peer = getPeer(agentId)
-          const ok = await pingPeer(agentId, peerPort, 5_000, peer?.endpoints)
+          const peer = getAgent(agentId)
+          const ok = await pingAgent(agentId, peerPort, 5_000, peer?.endpoints)
           console.log(ok ? `Reachable` : `Unreachable`)
         })
 
       awn
         .command("send <agentId> <message>")
-        .description("Send a direct message to a peer")
+        .description("Send a direct message to an agent")
         .action(async (agentId: string, message: string) => {
           if (!identity) {
             console.error("Plugin not started. Restart the gateway first.")
@@ -618,8 +661,9 @@ export default function register(api: any) {
           }
           console.log("=== Joined Worlds ===")
           for (const [id, info] of _joinedWorlds) {
-            const name = info.manifest?.name ?? id
-            console.log(`  ${id} — ${name} (${info.address}:${info.port})`)
+            const label = info.slug ?? id
+            const name = info.manifest?.name ?? label
+            console.log(`  ${label} — ${name} (${info.address}:${info.port}) [id ${id}]`)
             const actions = info.manifest?.actions
             if (actions && Object.keys(actions).length > 0) {
               const actionList = Object.entries(actions).map(([k, v]) => `${k} (${v.desc})`).join(", ")
@@ -637,7 +681,7 @@ export default function register(api: any) {
     description: "Show AWN node status",
     handler: () => {
       if (!identity) return { text: "AWN: not started yet." }
-      const peers = listPeers()
+      const agents = listAgents()
       const activeTransport = _transportManager?.active
       return {
         text: [
@@ -646,7 +690,7 @@ export default function register(api: any) {
           `DID Key: \`${deriveDidKey(identity.publicKey)}\``,
           `Transport: ${activeTransport?.id ?? "http-only"}`,
           ...(_quicTransport?.isActive() ? [`QUIC: \`${_quicTransport.address}\``] : []),
-          `Peers: ${peers.length} known`,
+          `Known agents: ${agents.length}`,
           `Worlds: ${_joinedWorlds.size} joined`,
         ].join("\n"),
       }
@@ -654,24 +698,26 @@ export default function register(api: any) {
   })
 
   api.registerCommand({
-    name: "awn-peers",
-    description: "List known AWN peers",
+    name: "awn-agents",
+    description: "List known AWN agents",
     handler: () => {
-      const peers = listPeers()
-      if (peers.length === 0) return { text: "No peers yet. Use `openclaw awn add <agent-id>`." }
-      const lines = peers.map((p) => {
+      const agents = listAgents()
+      if (agents.length === 0) return { text: "No agents yet. Use `openclaw awn add <agent-id>`." }
+      const lines = agents.map((p) => {
+        const ago = Math.round((Date.now() - p.lastSeen) / 1000)
         const label = p.alias ? ` — ${p.alias}` : ""
         const ver = p.version ? ` [v${p.version}]` : ""
-        return `\`${p.agentId}\`${label}${ver}`
+        const caps = p.capabilities?.length ? ` [${p.capabilities.join(", ")}]` : ""
+        return `${p.agentId}${label}${ver}${caps} — last seen ${ago}s ago`
       })
-      return { text: `**Known Peers**\n${lines.join("\n")}` }
+      return { text: `**Known Agents**\n${lines.join("\n")}` }
     },
   })
 
   // ── Agent tools ────────────────────────────────────────────────────────────
   api.registerTool({
     name: "awn_send_message",
-    description: "Send a signed AWN message to a peer agent by their agent ID. The peer must share a joined world with this agent.",
+    description: "Send a signed AWN message to an agent by their agent ID. The agent must share a joined world with this agent.",
     parameters: {
       type: "object",
       properties: {
@@ -696,23 +742,23 @@ export default function register(api: any) {
   })
 
   api.registerTool({
-    name: "awn_list_peers",
-    description: "List AWN peers from the local discovery cache. Optionally filter by capability prefix (e.g. 'world:' or 'world:pixel-city'). Entries may appear before you join a shared world, but direct messaging still requires world co-membership.",
+    name: "awn_list_agents",
+    description: "List AWN agents from the local discovery cache. Optionally filter by capability prefix (e.g. 'world:' or 'world:pixel-city'). Entries may appear before you join a shared world, but direct messaging still requires world co-membership.",
     parameters: {
       type: "object",
       properties: {
-        capability: { type: "string", description: "Filter peers by capability prefix (e.g. 'world:')" },
+        capability: { type: "string", description: "Filter agents by capability prefix (e.g. 'world:')" },
       },
       required: [],
     },
     async execute(_id: string, params: { capability?: string }) {
-      const peers = params.capability
-        ? findPeersByCapability(params.capability)
-        : listPeers()
-      if (peers.length === 0) {
-        return { content: [{ type: "text", text: "No peers found." }] }
+      const agents = params.capability
+        ? findAgentsByCapability(params.capability)
+        : listAgents()
+      if (agents.length === 0) {
+        return { content: [{ type: "text", text: "No agents found." }] }
       }
-      const lines = peers.map((p) => {
+      const lines = agents.map((p) => {
         const ago = Math.round((Date.now() - p.lastSeen) / 1000)
         const label = p.alias ? ` — ${p.alias}` : ""
         const ver = p.version ? ` [v${p.version}]` : ""
@@ -725,13 +771,13 @@ export default function register(api: any) {
 
   api.registerTool({
     name: "awn_status",
-    description: "Get this agent's AWN identity, transport mode, known peers, and joined worlds.",
+    description: "Get this agent's AWN identity, transport mode, known agents, and joined worlds.",
     parameters: { type: "object", properties: {}, required: [] },
     async execute(_id: string, _params: Record<string, never>) {
       if (!identity) {
         return { content: [{ type: "text", text: "AWN service not started." }] }
       }
-      const peers = listPeers()
+      const agents = listAgents()
       const activeTransport = _transportManager?.active
       const lines = [
         ...((_agentMeta.name) ? [`Agent name: ${_agentMeta.name}`] : []),
@@ -740,12 +786,13 @@ export default function register(api: any) {
         `Active transport: ${activeTransport?.id ?? "http-only"}`,
         ...(_quicTransport?.isActive() ? [`QUIC endpoint: ${_quicTransport.address}`] : []),
         `Plugin version: v${_agentMeta.version}`,
-        `Known peers: ${peers.length}`,
+        `Known agents: ${agents.length}`,
         `Worlds joined: ${_joinedWorlds.size}`,
       ]
       for (const [id, info] of _joinedWorlds) {
-        const name = info.manifest?.name ?? id
-        lines.push(`  ${id} — ${name}`)
+        const label = info.slug ?? id
+        const name = info.manifest?.name ?? label
+        lines.push(`  ${label} — ${name} [id ${id}]`)
         const actions = info.manifest?.actions
         if (actions && Object.keys(actions).length > 0) {
           lines.push("    Actions:")
@@ -761,50 +808,21 @@ export default function register(api: any) {
     description: "List available Agent worlds from the World Registry and local cache.",
     parameters: { type: "object", properties: {}, required: [] },
     async execute(_id: string, _params: Record<string, never>) {
-      // Fetch from Gateway
-      let registryWorlds: Array<{ agentId: string; alias?: string; endpoints?: Endpoint[]; capabilities?: string[]; lastSeen: number }> = []
-      try {
-        const resp = await fetch(`${getGatewayUrl()}/worlds`, { signal: AbortSignal.timeout(10_000) })
-        if (resp.ok) {
-          const data = await resp.json() as { worlds?: Array<{ worldId: string; agentId: string; name?: string; endpoints?: Endpoint[]; lastSeen?: number }> }
-          for (const w of data.worlds ?? []) {
-            if (w.agentId && !registryWorlds.some(rw => rw.agentId === w.agentId)) {
-              registryWorlds.push({
-                agentId: w.agentId,
-                alias: w.name,
-                endpoints: w.endpoints ?? [],
-                capabilities: [`world:${w.worldId}`],
-                lastSeen: w.lastSeen ?? Date.now(),
-              })
-              upsertDiscoveredPeer(w.agentId, "", {
-                alias: w.name,
-                endpoints: w.endpoints ?? [],
-                capabilities: [`world:${w.worldId}`],
-                source: "gateway",
-              })
-            }
-          }
-        }
-      } catch { /* gateway unreachable */ }
-
-      // Merge with local cache
-      const localWorlds = findPeersByCapability("world:")
-      const allWorlds = [...localWorlds]
-      for (const rw of registryWorlds) {
-        if (!allWorlds.some(w => w.agentId === rw.agentId)) {
-          allWorlds.push(rw as any)
+      const registryWorlds = await syncWorldsFromGateway()
+      const allWorlds = [...listWorlds()]
+      for (const world of registryWorlds) {
+        if (!allWorlds.some((item) => item.worldId === world.worldId)) {
+          allWorlds.push(world)
         }
       }
 
       if (!allWorlds.length) {
         return { content: [{ type: "text", text: "No worlds found. Use join_world with a world address to connect directly." }] }
       }
-      const lines = allWorlds.map((p) => {
-        const cap = p.capabilities?.find((c: string) => c.startsWith("world:")) ?? ""
-        const worldId = cap.slice("world:".length)
-        const ago = Math.round((Date.now() - (p.lastSeen ?? 0)) / 1000)
-        const reachable = p.endpoints?.length ? "reachable" : "no endpoint"
-        return `world:${worldId} — ${p.alias || worldId} [${reachable}] — last seen ${ago}s ago`
+      const lines = allWorlds.map((world) => {
+        const ago = Math.round((Date.now() - world.lastSeen) / 1000)
+        const reachable = world.endpoints.length ? "reachable" : "no endpoint"
+        return `${world.slug} [${reachable}] — id ${world.worldId} — last seen ${ago}s ago`
       })
       return { content: [{ type: "text", text: `Found ${allWorlds.length} world(s):\n${lines.join("\n")}` }] }
     },
@@ -816,7 +834,7 @@ export default function register(api: any) {
     parameters: {
       type: "object",
       properties: {
-        world_id: { type: "string", description: "The world ID (e.g. 'pixel-city') — looks up from known worlds" },
+        world_id: { type: "string", description: "The protocol world ID or slug — looks up from known worlds" },
         address: { type: "string", description: "Direct address of the world server (e.g. 'example.com:8099' or '1.2.3.4:8099')" },
         alias: { type: "string", description: "Optional display name inside the world" },
       },
@@ -834,13 +852,14 @@ export default function register(api: any) {
       let targetPort: number = peerPort
       let worldAgentId: string | undefined
       let worldPublicKey: string | undefined
+      let worldSlug: string | undefined
 
       if (params.address) {
         const parsedAddress = parseDirectPeerAddress(params.address, peerPort)
         targetAddr = parsedAddress.address
         targetPort = parsedAddress.port
 
-        const ping = await getPeerPingInfo(targetAddr, targetPort, 5_000)
+        const ping = await getAgentPingInfo(targetAddr, targetPort, 5_000)
         if (!ping.ok) {
           return { content: [{ type: "text", text: `World at ${params.address} is unreachable.` }], isError: true }
         }
@@ -852,38 +871,40 @@ export default function register(api: any) {
         }
         worldAgentId = ping.data.agentId
         worldPublicKey = ping.data.publicKey
+        worldSlug = typeof ping.data?.slug === "string"
+          ? ping.data.slug
+          : typeof ping.data?.worldId === "string" && !ping.data.worldId.startsWith("aw:sha256:")
+            ? ping.data.worldId
+            : undefined
       } else {
-        const worlds = findPeersByCapability(`world:${params.world_id}`)
-        if (!worlds.length) {
+        let world = resolveKnownWorld(params.world_id)
+        if (!world) {
+          await syncWorldsFromGateway()
+          world = resolveKnownWorld(params.world_id)
+        }
+        if (!world) {
           return { content: [{ type: "text", text: `World '${params.world_id}' not found. Use address parameter to connect directly.` }] }
         }
-        let world = worlds[0]
-        if ((!world.endpoints?.length || !world.publicKey) && params.world_id) {
-          const gatewayWorld = await fetchGatewayWorldRecord(params.world_id)
-          if (gatewayWorld?.agentId) {
-            upsertDiscoveredPeer(gatewayWorld.agentId, gatewayWorld.publicKey ?? "", {
-              alias: gatewayWorld.alias ?? world.alias,
-              capabilities: world.capabilities,
+        if ((!world.endpoints.length || !world.publicKey) && world.worldId) {
+          const gatewayWorld = await fetchGatewayWorldRecord(world.worldId)
+          if (gatewayWorld?.worldId) {
+            upsertWorld(gatewayWorld.worldId, {
+              slug: gatewayWorld.slug ?? world.slug,
+              publicKey: gatewayWorld.publicKey ?? world.publicKey,
               endpoints: gatewayWorld.endpoints ?? world.endpoints,
               source: "gateway",
             })
-
-            world = getPeer(gatewayWorld.agentId) ?? {
-              ...world,
-              agentId: gatewayWorld.agentId,
-              alias: gatewayWorld.alias ?? world.alias,
-              endpoints: gatewayWorld.endpoints ?? world.endpoints,
-              publicKey: gatewayWorld.publicKey ?? world.publicKey,
-            }
+            world = getWorld(gatewayWorld.worldId) ?? world
           }
         }
-        if (!world.endpoints?.length) {
+        if (!world.endpoints.length) {
           return { content: [{ type: "text", text: `World '${params.world_id}' has no reachable endpoints.` }] }
         }
         targetAddr = world.endpoints[0].address
         targetPort = world.endpoints[0].port ?? peerPort
-        worldAgentId = world.agentId
-        worldPublicKey = getPeer(worldAgentId)?.publicKey ?? world.publicKey ?? ""
+        worldAgentId = world.worldId
+        worldPublicKey = world.publicKey
+        worldSlug = world.slug
       }
 
       if (!worldPublicKey) {
@@ -912,16 +933,21 @@ export default function register(api: any) {
         return { content: [{ type: "text", text: `Failed to join world: ${result.error}` }], isError: true }
       }
 
-      const worldId = (result.data?.worldId ?? params.world_id ?? params.address) as string
+      const worldId = worldAgentId!
       const members = result.data?.members as unknown[] | undefined
       const memberCount = members?.length ?? 0
+      const joinedSlug = typeof result.data?.slug === "string"
+        ? result.data.slug
+        : typeof result.data?.worldId === "string" && !result.data.worldId.startsWith("aw:sha256:")
+          ? result.data.worldId
+          : worldSlug ?? worldId
       const worldName = typeof result.data?.manifest === "object" && result.data?.manifest && typeof (result.data.manifest as { name?: unknown }).name === "string"
         ? (result.data.manifest as { name: string }).name
-        : worldId
+        : joinedSlug
 
-      upsertDiscoveredPeer(worldAgentId!, worldPublicKey, {
-        alias: worldName,
-        capabilities: [`world:${worldId}`],
+      upsertWorld(worldId, {
+        slug: joinedSlug,
+        publicKey: worldPublicKey,
         endpoints: [{ transport: "tcp", address: targetAddr, port: targetPort, priority: 1, ttl: 3600 }],
         source: "gossip",
       })
@@ -934,13 +960,13 @@ export default function register(api: any) {
       const manifest = typeof result.data?.manifest === "object" && result.data?.manifest
         ? result.data.manifest as JoinedWorldInfo["manifest"]
         : undefined
-      _joinedWorlds.set(worldId, { agentId: worldAgentId!, address: targetAddr, port: targetPort, publicKey: worldPublicKey, manifest })
+      _joinedWorlds.set(worldId, { agentId: worldId, slug: joinedSlug, address: targetAddr, port: targetPort, publicKey: worldPublicKey, manifest })
       _worldRefreshFailures.delete(worldId)
       if (!_memberRefreshTimer) {
         _memberRefreshTimer = setInterval(refreshWorldMembers, MEMBER_REFRESH_INTERVAL_MS)
       }
 
-      const lines = [`Joined world '${worldId}' (${worldName}) — ${memberCount} other member(s)`]
+      const lines = [`Joined world '${joinedSlug}' (${worldName}) — ${memberCount} other member(s)`]
       if (manifest?.actions && Object.keys(manifest.actions).length > 0) {
         lines.push("")
         lines.push("Available actions:")
@@ -971,17 +997,22 @@ export default function register(api: any) {
       }
 
       let worldId = params.world_id
+      let info: JoinedWorldInfo | undefined
       if (!worldId) {
         if (_joinedWorlds.size === 1) {
-          worldId = [..._joinedWorlds.keys()][0]
+          ;[worldId, info] = [..._joinedWorlds.entries()][0]
         } else {
-          const ids = [..._joinedWorlds.keys()].join(", ")
+          const ids = [..._joinedWorlds.entries()].map(([id, joined]) => joined.slug ?? id).join(", ")
           return { content: [{ type: "text", text: `Multiple worlds joined (${ids}). Specify world_id.` }], isError: true }
         }
       }
-
-      const info = _joinedWorlds.get(worldId)
-      if (!info) {
+      if (!info && worldId) {
+        const resolved = resolveJoinedWorld(worldId)
+        if (resolved) {
+          ;[worldId, info] = resolved
+        }
+      }
+      if (!info || !worldId) {
         return { content: [{ type: "text", text: `Not joined world '${worldId}'.` }], isError: true }
       }
 
@@ -997,7 +1028,7 @@ export default function register(api: any) {
       const stateText = result.data?.state !== undefined
         ? `\nState: ${JSON.stringify(result.data.state)}`
         : ""
-      return { content: [{ type: "text", text: `Action '${params.action}' executed in world '${worldId}'.${stateText}` }] }
+      return { content: [{ type: "text", text: `Action '${params.action}' executed in world '${info.slug ?? worldId}'.${stateText}` }] }
     },
   })
 
@@ -1020,23 +1051,29 @@ export default function register(api: any) {
       }
 
       let worldId = params.world_id
+      let info: JoinedWorldInfo | undefined
       if (!worldId) {
         if (_joinedWorlds.size === 1) {
-          worldId = [..._joinedWorlds.keys()][0]
+          ;[worldId, info] = [..._joinedWorlds.entries()][0]
         } else {
-          const ids = [..._joinedWorlds.keys()].join(", ")
+          const ids = [..._joinedWorlds.entries()].map(([id, joined]) => joined.slug ?? id).join(", ")
           return { content: [{ type: "text", text: `Multiple worlds joined (${ids}). Specify world_id.` }], isError: true }
         }
       }
-
-      const info = _joinedWorlds.get(worldId)
-      if (!info) {
+      if (!info && worldId) {
+        const resolved = resolveJoinedWorld(worldId)
+        if (resolved) {
+          ;[worldId, info] = resolved
+        }
+      }
+      if (!info || !worldId) {
         return { content: [{ type: "text", text: `Not joined world '${worldId}'.` }], isError: true }
       }
 
       const manifest = info.manifest
       const lines: string[] = []
-      lines.push(`World: ${manifest?.name ?? worldId} (${worldId})`)
+      lines.push(`World: ${manifest?.name ?? info.slug ?? worldId} (${info.slug ?? worldId})`)
+      lines.push(`Protocol ID: ${worldId}`)
       if (manifest?.description) lines.push(`Description: ${manifest.description}`)
       if (manifest?.objective) lines.push(`Objective: ${manifest.objective}`)
       if (manifest?.type) lines.push(`Type: ${manifest.type}`)

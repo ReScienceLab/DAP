@@ -23,8 +23,8 @@ export const EndpointSchema = {
   },
 }
 
-export const PeerRecordSchema = {
-  $id: "PeerRecord",
+export const AgentRecordSchema = {
+  $id: "AgentRecord",
   type: "object",
   required: ["agentId", "publicKey", "alias", "endpoints", "capabilities", "lastSeen"],
   properties: {
@@ -40,11 +40,10 @@ export const PeerRecordSchema = {
 export const WorldSummarySchema = {
   $id: "WorldSummary",
   type: "object",
-  required: ["worldId", "agentId", "name", "endpoints", "reachable", "lastSeen"],
+  required: ["worldId", "endpoints", "reachable", "lastSeen"],
   properties: {
     worldId: { type: "string" },
-    agentId: { type: "string" },
-    name: { type: "string" },
+    slug: { type: "string" },
     endpoints: { type: "array", items: { $ref: "Endpoint#" } },
     reachable: { type: "boolean" },
     lastSeen: { type: "integer" },
@@ -54,12 +53,11 @@ export const WorldSummarySchema = {
 export const WorldDetailSchema = {
   $id: "WorldDetail",
   type: "object",
-  required: ["worldId", "agentId", "publicKey", "name", "endpoints", "reachable", "subscribers", "lastSeen"],
+  required: ["worldId", "publicKey", "endpoints", "reachable", "subscribers", "lastSeen"],
   properties: {
     worldId: { type: "string" },
-    agentId: { type: "string" },
+    slug: { type: "string" },
     publicKey: { type: "string" },
-    name: { type: "string" },
     endpoints: { type: "array", items: { $ref: "Endpoint#" } },
     reachable: { type: "boolean" },
     subscribers: { type: "integer", description: "Number of active WebSocket subscribers" },
@@ -75,6 +73,7 @@ export const AnnounceRequestSchema = {
     from: { type: "string", description: "aw:sha256:{hex} agent identifier" },
     publicKey: { type: "string", description: "Base64-encoded Ed25519 public key" },
     alias: { type: "string" },
+    slug: { type: "string", description: "Optional human-friendly world label for world servers" },
     version: { type: "string", default: "1.0.0" },
     endpoints: { type: "array", items: { $ref: "Endpoint#" } },
     capabilities: { type: "array", items: { type: "string" } },
@@ -110,7 +109,7 @@ export const SignedMessageSchema = {
 export const allSchemas = [
   ErrorSchema,
   EndpointSchema,
-  PeerRecordSchema,
+  AgentRecordSchema,
   WorldSummarySchema,
   WorldDetailSchema,
   AnnounceRequestSchema,
