@@ -257,7 +257,7 @@ async fn main() {
             }
         }
         Commands::World { ref world_id } => {
-            let ipc = resolve_ipc_port(&cli);
+            let ipc = resolve_ipc_port_raw(cli_ipc_port);
             let encoded_id = urlencoding(world_id);
             let url = format!("http://127.0.0.1:{ipc}/ipc/world/{encoded_id}");
             match reqwest::get(&url).await {

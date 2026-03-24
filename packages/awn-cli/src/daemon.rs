@@ -149,7 +149,7 @@ pub async fn start_daemon(
         .route("/ipc/status", get(handle_status))
         .route("/ipc/agents", get(handle_agents))
         .route("/ipc/worlds", get(handle_worlds))
-        .route("/ipc/world/:world_id", get(handle_world_info))
+        .route("/ipc/world/{world_id}", get(handle_world_info))
         .route("/ipc/ping", get(handle_ping))
         .route(
             "/ipc/shutdown",
