@@ -1,5 +1,6 @@
 mod crypto;
+mod identity;
 
 fn main() {
-    println!("awn-cli v{}", env!("CARGO_PKG_VERSION"));
+    println!("awn v{}", env!("CARGO_PKG_VERSION"));
 }
