@@ -86,9 +86,8 @@ export const AnnounceRequestSchema = {
 export const HeartbeatRequestSchema = {
   $id: "HeartbeatRequest",
   type: "object",
-  required: ["agentId", "ts", "signature"],
+  required: ["ts", "signature"],
   properties: {
-    agentId: { type: "string", description: "aw:sha256:{hex} agent identifier" },
     ts: { type: "integer", description: "Unix timestamp (ms)" },
     signature: { type: "string", description: "Domain-separated Ed25519 signature (HEARTBEAT context)" },
   },
