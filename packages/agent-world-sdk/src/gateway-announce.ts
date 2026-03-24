@@ -33,7 +33,7 @@ export async function announceToGateway(
     peerDb,
   } = opts;
 
-  const url = `${gatewayUrl.replace(/\/+$/, "")}/peer/announce`;
+  const url = `${gatewayUrl.replace(/\/+$/, "")}/agents`;
 
   const endpoints = publicAddr
     ? [
@@ -106,27 +106,40 @@ export async function announceToGateway(
 
 /**
  * Send a lightweight heartbeat to a gateway.
+ * World servers use POST /worlds/:worldId/heartbeat (signature covers { worldId, ts }).
+ * Regular agents use POST /agents/:agentId/heartbeat (signature covers { agentId, ts }).
  * Returns true if the gateway accepted it, false if it responded with
- * 404/403 (agent unknown or key mismatch — caller should re-announce).
+ * 404/403 (unknown or key mismatch — caller should re-announce).
  * Network errors return true (no re-announce needed, gateway is just unreachable).
  */
 export async function sendHeartbeat(
   gatewayUrl: string,
-  identity: Identity
+  identity: Identity,
+  opts: { worldId?: string } = {}
 ): Promise<boolean> {
-  const url = `${gatewayUrl.replace(/\/+$/, "")}/peer/heartbeat`;
+  const base = gatewayUrl.replace(/\/+$/, "");
   const ts = Date.now();
-  const payload = { agentId: identity.agentId, ts };
+  let url: string;
+  let signable: Record<string, unknown>;
+
+  if (opts.worldId) {
+    url = `${base}/worlds/${encodeURIComponent(opts.worldId)}/heartbeat`;
+    signable = { worldId: opts.worldId, ts };
+  } else {
+    url = `${base}/agents/${encodeURIComponent(identity.agentId)}/heartbeat`;
+    signable = { agentId: identity.agentId, ts };
+  }
+
   const signature = signWithDomainSeparator(
     DOMAIN_SEPARATORS.HEARTBEAT,
-    payload,
+    signable,
     identity.secretKey
   );
   try {
     const resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...payload, signature }),
+      body: JSON.stringify({ ts, signature }),
       signal: AbortSignal.timeout(5_000),
     });
     if (resp.status === 404 || resp.status === 403) return false;
@@ -167,9 +180,12 @@ export async function startGatewayAnnounce(opts: GatewayAnnounceOpts): Promise<(
     onDiscovery?.(opts.peerDb.size);
   }
 
+  const worldCap = opts.capabilities.find((c) => c.startsWith("world:"));
+  const worldId = worldCap ? worldCap.slice("world:".length) : undefined;
+
   async function runHeartbeat() {
     const results = await Promise.allSettled(
-      urls.map(async (u) => ({ url: u, ok: await sendHeartbeat(u, opts.identity) }))
+      urls.map(async (u) => ({ url: u, ok: await sendHeartbeat(u, opts.identity, { worldId }) }))
     );
     // Re-announce to any gateway that rejected the heartbeat (404/403)
     const reannounce = results

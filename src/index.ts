@@ -323,7 +323,7 @@ async function fetchGatewayWorldRecord(worldId: string): Promise<{
   publicKey?: string
 } | null> {
   try {
-    const resp = await fetch(`${getGatewayUrl()}/world/${encodeURIComponent(worldId)}`, {
+    const resp = await fetch(`${getGatewayUrl()}/worlds/${encodeURIComponent(worldId)}`, {
       signal: AbortSignal.timeout(10_000),
     })
     if (!resp.ok) return null

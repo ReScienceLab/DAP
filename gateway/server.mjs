@@ -2,19 +2,22 @@
  * AWN Gateway — stateless portal + WebSocket bridge.
  * No OpenClaw dependency. Runs on plain HTTP/TCP.
  *
- * World Servers announce directly to this Gateway via POST /peer/announce.
+ * World Servers register with this Gateway via POST /agents (with a world: capability).
  * The Gateway maintains a peer DB and exposes discovered worlds via /worlds.
  *
  * HTTP Endpoints:
- *   GET  /health          — health check
- *   GET  /worlds          — list discovered world:* agents on AWN network
- *   GET  /agents          — list all known AWN agents
- *   GET  /world/:worldId  — info about a specific world
- *   GET  /peer/ping       — peer liveness
- *   GET  /peer/peers      — known peers exchange
- *   POST /peer/announce   — world server registration
- *   POST /peer/heartbeat  — lightweight liveness heartbeat
- *   POST /peer/message    — inbound signed message (world.state broadcasts)
+ *   GET  /health                       — health check
+ *   GET  /ping                         — peer liveness
+ *   GET  /worlds                       — list discovered world:* agents on AWN network
+ *   GET  /worlds/:worldId              — info about a specific world
+ *   DELETE /worlds/:worldId            — deregister a world (admin, requires GATEWAY_ADMIN_KEY bearer token if set)
+ *   GET  /agents                       — list all known AWN agents
+ *   GET  /agents/:agentId              — get a specific agent record
+ *   DELETE /agents/:agentId            — deregister an agent (admin, requires GATEWAY_ADMIN_KEY bearer token if set)
+ *   POST /agents                       — register or re-announce an agent (online)
+ *   POST /agents/:agentId/heartbeat    — agent liveness heartbeat
+ *   POST /worlds/:worldId/heartbeat    — world server liveness heartbeat
+ *   POST /messages                     — inbound signed message (world.state broadcasts)
  *
  * WebSocket:
  *   WS   /ws?world=<worldId>  — subscribe to a world's real-time events
@@ -335,8 +338,8 @@ export async function createGatewayApp(opts = {}) {
         title: "AWN Gateway",
         description:
           "Agent World Network Gateway — stateless portal + WebSocket bridge.\n" +
-          "World Servers announce directly via POST /peer/announce and stay alive\n" +
-          "with periodic POST /peer/heartbeat signals.\n\n" +
+          "World Servers register via POST /agents (with a `world:` capability) and stay alive\n" +
+          "with periodic POST /agents/:agentId/heartbeat signals.\n\n" +
           "**WebSocket** — `ws://{host}/ws?world={worldId}` subscribes to a world's\n" +
           "real-time events (world.state broadcasts, join/leave/action messages).",
         version: "0.5.0",
@@ -393,6 +396,25 @@ export async function createGatewayApp(opts = {}) {
       status,
     }
   });
+
+  app.get("/ping", {
+    schema: {
+      summary: "Peer liveness check",
+      operationId: "getPing",
+      tags: ["gateway"],
+      response: {
+        200: {
+          type: "object",
+          required: ["ok", "ts", "role"],
+          properties: {
+            ok: { type: "boolean" },
+            ts: { type: "integer" },
+            role: { type: "string", enum: ["gateway"] },
+          },
+        },
+      },
+    },
+  }, async () => ({ ok: true, ts: Date.now(), role: "gateway" }));
 
   let _cachedCardJson = null
   app.get("/.well-known/agent.json", {
@@ -466,7 +488,7 @@ export async function createGatewayApp(opts = {}) {
     };
   });
 
-  app.get("/world/:worldId", {
+  app.get("/worlds/:worldId", {
     schema: {
       summary: "Get info about a specific world",
       operationId: "getWorld",
@@ -496,6 +518,107 @@ export async function createGatewayApp(opts = {}) {
       subscribers: worldSubs.get(worldId)?.size ?? 0,
       lastSeen: w.lastSeen,
     };
+  });
+
+  app.delete("/worlds/:worldId", {
+    schema: {
+      summary: "Deregister a world (admin)",
+      operationId: "deleteWorld",
+      tags: ["gateway"],
+      params: {
+        type: "object",
+        required: ["worldId"],
+        properties: { worldId: { type: "string" } },
+      },
+      response: {
+        200: {
+          type: "object",
+          required: ["ok", "removed"],
+          properties: { ok: { type: "boolean" }, removed: { type: "integer" } },
+        },
+        403: { $ref: "Error#" },
+        404: { $ref: "Error#" },
+      },
+    },
+  }, async (req, reply) => {
+    const adminKey = process.env.GATEWAY_ADMIN_KEY;
+    if (adminKey) {
+      const auth = req.headers["authorization"] ?? "";
+      if (auth !== `Bearer ${adminKey}`) {
+        return reply.code(403).send({ error: "Forbidden" });
+      }
+    }
+    const { worldId } = req.params;
+    const worlds = findByCapability(`world:${worldId}`);
+    if (!worlds.length) return reply.code(404).send({ error: "World not found" });
+    let removed = 0;
+    for (const w of worlds) {
+      registry.delete(w.agentId);
+      removed++;
+    }
+    _registryModifiedAt = Date.now();
+    flushRegistry();
+    console.log(`[gateway] Deregistered world:${worldId} (${removed} agent(s) removed)`);
+    return { ok: true, removed };
+  });
+
+  app.get("/agents/:agentId", {
+    schema: {
+      summary: "Get a specific agent record",
+      operationId: "getAgent",
+      tags: ["gateway"],
+      params: {
+        type: "object",
+        required: ["agentId"],
+        properties: { agentId: { type: "string" } },
+      },
+      response: {
+        200: { $ref: "PeerRecord#" },
+        404: { $ref: "Error#" },
+      },
+    },
+  }, async (req, reply) => {
+    const { agentId } = req.params;
+    const agent = registry.get(agentId);
+    if (!agent) return reply.code(404).send({ error: "Agent not found" });
+    return agent;
+  });
+
+  app.delete("/agents/:agentId", {
+    schema: {
+      summary: "Deregister an agent (admin)",
+      operationId: "deleteAgent",
+      tags: ["gateway"],
+      params: {
+        type: "object",
+        required: ["agentId"],
+        properties: { agentId: { type: "string" } },
+      },
+      response: {
+        200: {
+          type: "object",
+          required: ["ok"],
+          properties: { ok: { type: "boolean" } },
+        },
+        403: { $ref: "Error#" },
+        404: { $ref: "Error#" },
+      },
+    },
+  }, async (req, reply) => {
+    const adminKey = process.env.GATEWAY_ADMIN_KEY;
+    if (adminKey) {
+      const auth = req.headers["authorization"] ?? "";
+      if (auth !== `Bearer ${adminKey}`) {
+        return reply.code(403).send({ error: "Forbidden" });
+      }
+    }
+    const { agentId } = req.params;
+    if (!registry.has(agentId)) return reply.code(404).send({ error: "Agent not found" });
+    registry.delete(agentId);
+    _registryModifiedAt = Date.now();
+    flushRegistry();
+    console.log(`[gateway] Deregistered agent:${agentId}`);
+    return { ok: true };
   });
 
   app.get("/ws", { websocket: true }, (socket, req) => {
@@ -580,46 +703,12 @@ export async function createGatewayApp(opts = {}) {
     const noValidate = () => () => true;
     peer.setValidatorCompiler(noValidate);
 
-    peer.get("/peer/ping", {
+    peer.post("/agents", {
       schema: {
-        summary: "Peer liveness check",
-        operationId: "getPeerPing",
-        tags: ["peer"],
-        response: {
-          200: {
-            type: "object",
-            required: ["ok", "ts", "role"],
-            properties: {
-              ok: { type: "boolean" },
-              ts: { type: "integer" },
-              role: { type: "string", enum: ["gateway"] },
-            },
-          },
-        },
-      },
-    }, async () => ({ ok: true, ts: Date.now(), role: "gateway" }));
-
-    peer.get("/peer/peers", {
-      schema: {
-        summary: "Exchange known peers",
-        operationId: "getPeerPeers",
-        tags: ["peer"],
-        response: {
-          200: {
-            type: "object",
-            required: ["peers"],
-            properties: { peers: { type: "array", items: { $ref: "PeerRecord#" } } },
-          },
-        },
-      },
-    }, async () => ({ peers: getAgentsForExchange() }));
-
-    peer.post("/peer/announce", {
-      schema: {
-        summary: "Register or re-announce a world server",
-        operationId: "postAnnounce",
-        tags: ["peer"],
-        description: "Ed25519-signed announcement from a world server.",
+        summary: "Register or re-announce an agent (online)",
+        operationId: "postAgents",
+        tags: ["gateway"],
+        description: "Ed25519-signed agent registration. World servers include a `world:` capability.",
         body: { $ref: "AnnounceRequest#" },
         response: {
           200: {
@@ -660,12 +749,17 @@ export async function createGatewayApp(opts = {}) {
       return { ok: true, peers: getAgentsForExchange(20) };
     });
 
-    peer.post("/peer/heartbeat", {
+    peer.post("/agents/:agentId/heartbeat", {
       schema: {
         summary: "Lightweight liveness heartbeat",
         operationId: "postHeartbeat",
-        tags: ["peer"],
+        tags: ["gateway"],
         description: "Updates an agent's lastSeen without a full re-announce.",
+        params: {
+          type: "object",
+          required: ["agentId"],
+          properties: { agentId: { type: "string" } },
+        },
         body: { $ref: "HeartbeatRequest#" },
         response: {
           200: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } },
@@ -675,8 +769,9 @@ export async function createGatewayApp(opts = {}) {
         },
       },
     }, async (req, reply) => {
-      const { agentId, ts, signature } = req.body ?? {};
-      if (!agentId || !ts || !signature) return reply.code(400).send({ error: "Invalid heartbeat" });
+      const { agentId } = req.params;
+      const { ts, signature } = req.body ?? {};
+      if (!ts || !signature) return reply.code(400).send({ error: "Invalid heartbeat" });
 
       const skew = Math.abs(Date.now() - ts);
       if (skew > 5 * 60 * 1000) return reply.code(400).send({ error: "Timestamp out of range" });
@@ -697,11 +792,55 @@ export async function createGatewayApp(opts = {}) {
       return { ok: true };
     });
 
-    peer.post("/peer/message", {
+    peer.post("/worlds/:worldId/heartbeat", {
+      schema: {
+        summary: "World server liveness heartbeat",
+        operationId: "postWorldHeartbeat",
+        tags: ["gateway"],
+        description: "Updates a world server's lastSeen without a full re-announce.",
+        params: {
+          type: "object",
+          required: ["worldId"],
+          properties: { worldId: { type: "string" } },
+        },
+        body: { $ref: "HeartbeatRequest#" },
+        response: {
+          200: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } },
+          400: { $ref: "Error#" },
+          403: { $ref: "Error#" },
+          404: { $ref: "Error#" },
+        },
+      },
+    }, async (req, reply) => {
+      const { worldId } = req.params;
+      const { ts, signature } = req.body ?? {};
+      if (!ts || !signature) return reply.code(400).send({ error: "Invalid heartbeat" });
+
+      const skew = Math.abs(Date.now() - ts);
+      if (skew > 5 * 60 * 1000) return reply.code(400).send({ error: "Timestamp out of range" });
+
+      const worlds = findByCapability(`world:${worldId}`);
+      if (!worlds.length) return reply.code(404).send({ error: "World not found" });
+      const existing = worlds[0];
+
+      const ok = verifyWithDomainSeparator(
+        DOMAIN_SEPARATORS.HEARTBEAT,
+        existing.publicKey,
+        { worldId, ts },
+        signature
+      );
+      if (!ok) return reply.code(403).send({ error: "Invalid signature" });
+
+      existing.lastSeen = Date.now();
+      _registryModifiedAt = existing.lastSeen;
+      return { ok: true };
+    });
+
+    peer.post("/messages", {
       schema: {
         summary: "Inbound signed message (world.state broadcasts)",
-        operationId: "postMessage",
-        tags: ["peer"],
+        operationId: "postMessages",
+        tags: ["gateway"],
         description: "Receives Ed25519-signed messages from world servers.",
         body: { $ref: "SignedMessage#" },
         response: {
