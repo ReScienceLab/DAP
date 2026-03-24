@@ -13,6 +13,10 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
+    /// IPC port for CLI ↔ daemon communication (overrides AWN_IPC_PORT and saved port file)
+    #[arg(long, global = true)]
+    ipc_port: Option<u16>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -49,9 +53,6 @@ enum DaemonAction {
         /// Peer server port
         #[arg(long, default_value_t = 8099)]
         port: u16,
-        /// IPC port for CLI ↔ daemon communication
-        #[arg(long, default_value_t = 0)]
-        ipc_port: u16,
     },
     /// Stop the AWN daemon
     Stop,
@@ -67,18 +68,14 @@ async fn main() {
                 data_dir,
                 gateway_url,
                 port,
-                ipc_port,
             } => {
                 let data_dir = data_dir.unwrap_or_else(daemon::default_data_dir);
                 let gateway_url = gateway_url.unwrap_or_else(daemon::default_gateway_url);
-                let ipc_port = if ipc_port == 0 {
-                    daemon::ipc_port()
-                } else {
-                    ipc_port
-                };
+                let ipc_port = cli.ipc_port.unwrap_or_else(|| daemon::ipc_port());
 
-                match daemon::start_daemon(data_dir, gateway_url, port, ipc_port).await {
+                match daemon::start_daemon(data_dir.clone(), gateway_url, port, ipc_port).await {
                     Ok(handle) => {
+                        daemon::write_port_file(&data_dir, handle.addr.port());
                         if cli.json {
                             println!(
                                 "{}",
@@ -92,6 +89,7 @@ async fn main() {
                             eprintln!("Press Ctrl+C to stop");
                         }
                         tokio::signal::ctrl_c().await.ok();
+                        daemon::remove_port_file(&data_dir);
                         handle.shutdown();
                         if !cli.json {
                             eprintln!("Daemon stopped");
@@ -111,12 +109,13 @@ async fn main() {
                 if cli.json {
                     println!("{}", serde_json::json!({"error": "daemon stop not yet implemented (use Ctrl+C)"}));
                 } else {
-                    eprintln!("Use Ctrl+C to stop the daemon, or kill the process.");
+                    eprintln!("Error: daemon stop not yet implemented. Use Ctrl+C to stop the daemon, or kill the process.");
                 }
+                std::process::exit(1);
             }
         },
         Commands::Status => {
-            let ipc = daemon::ipc_port();
+            let ipc = resolve_ipc_port(&cli);
             let url = format!("http://127.0.0.1:{ipc}/ipc/status");
             match reqwest::get(&url).await {
                 Ok(resp) => {
@@ -144,10 +143,10 @@ async fn main() {
                 }
             }
         }
-        Commands::Peers { capability } => {
-            let ipc = daemon::ipc_port();
+        Commands::Peers { ref capability } => {
+            let ipc = resolve_ipc_port(&cli);
             let mut url = format!("http://127.0.0.1:{ipc}/ipc/peers");
-            if let Some(cap) = &capability {
+            if let Some(cap) = capability {
                 url = format!("{url}?capability={}", urlencoding(cap));
             }
             match reqwest::get(&url).await {
@@ -187,7 +186,7 @@ async fn main() {
             }
         }
         Commands::Worlds => {
-            let ipc = daemon::ipc_port();
+            let ipc = resolve_ipc_port(&cli);
             let url = format!("http://127.0.0.1:{ipc}/ipc/worlds");
             match reqwest::get(&url).await {
                 Ok(resp) => {
@@ -217,6 +216,16 @@ async fn main() {
             }
         }
     }
+}
+
+fn resolve_ipc_port(cli: &Cli) -> u16 {
+    if let Some(port) = cli.ipc_port {
+        return port;
+    }
+    if let Ok(port) = std::env::var("AWN_IPC_PORT").and_then(|s| s.parse().map_err(|_| std::env::VarError::NotPresent)) {
+        return port;
+    }
+    daemon::read_port_file(&daemon::default_data_dir()).unwrap_or_else(|| daemon::ipc_port())
 }
 
 fn urlencoding(s: &str) -> String {

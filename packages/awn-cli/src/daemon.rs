@@ -236,6 +236,23 @@ pub fn default_gateway_url() -> String {
     std::env::var("GATEWAY_URL").unwrap_or_else(|_| "https://gateway.agentworlds.ai".to_string())
 }
 
+const PORT_FILE: &str = "daemon.port";
+
+pub fn write_port_file(data_dir: &std::path::Path, port: u16) {
+    let _ = std::fs::create_dir_all(data_dir);
+    let _ = std::fs::write(data_dir.join(PORT_FILE), port.to_string());
+}
+
+pub fn read_port_file(data_dir: &std::path::Path) -> Option<u16> {
+    std::fs::read_to_string(data_dir.join(PORT_FILE))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+}
+
+pub fn remove_port_file(data_dir: &std::path::Path) {
+    let _ = std::fs::remove_file(data_dir.join(PORT_FILE));
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
     #[error("identity error: {0}")]
