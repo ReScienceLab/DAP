@@ -1,4 +1,4 @@
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -8,7 +8,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 
-use crate::crypto;
 use crate::identity::{self, Identity};
 use crate::agent_db::{Endpoint, AgentDb, AgentRecord};
 
@@ -57,6 +56,44 @@ pub struct WorldSummary {
     pub reachable: bool,
     #[serde(rename = "lastSeen")]
     pub last_seen: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct WorldInfoResponse {
+    #[serde(rename = "worldId")]
+    pub world_id: String,
+    pub name: String,
+    pub endpoints: Vec<Endpoint>,
+    pub reachable: bool,
+    pub manifest: Option<WorldManifest>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct WorldManifest {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actions: Option<std::collections::HashMap<String, ActionSchema>>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ActionSchema {
+    pub desc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<std::collections::HashMap<String, ActionParam>>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ActionParam {
+    #[serde(rename = "type")]
+    pub param_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desc: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -112,6 +149,7 @@ pub async fn start_daemon(
         .route("/ipc/status", get(handle_status))
         .route("/ipc/agents", get(handle_agents))
         .route("/ipc/worlds", get(handle_worlds))
+        .route("/ipc/world/{world_id}", get(handle_world_info))
         .route("/ipc/ping", get(handle_ping))
         .route(
             "/ipc/shutdown",
@@ -234,6 +272,111 @@ async fn handle_worlds(State(state): State<DaemonState>) -> Json<WorldsResponse>
     }
 
     Json(WorldsResponse { worlds })
+}
+
+async fn handle_world_info(
+    State(state): State<DaemonState>,
+    Path(world_id): Path<String>,
+) -> Result<Json<WorldInfoResponse>, StatusCode> {
+    // First try to get from gateway
+    let url = format!("{}/worlds", state.gateway_url.trim_end_matches('/'));
+    let mut world_summary: Option<WorldSummary> = None;
+
+    if let Ok(resp) = reqwest::get(&url).await {
+        if let Ok(data) = resp.json::<serde_json::Value>().await {
+            if let Some(arr) = data.get("worlds").and_then(|w| w.as_array()) {
+                for w in arr {
+                    let wid = w.get("worldId").and_then(|v| v.as_str()).unwrap_or("");
+                    if wid == world_id {
+                        let agent_id = w.get("agentId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let name = w.get("slug").and_then(|v| v.as_str()).unwrap_or(&world_id).to_string();
+                        let last_seen = w.get("lastSeen").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let endpoints: Vec<Endpoint> = w
+                            .get("endpoints")
+                            .and_then(|v| serde_json::from_value(v.clone()).ok())
+                            .unwrap_or_default();
+                        let reachable = !endpoints.is_empty();
+                        world_summary = Some(WorldSummary {
+                            world_id: wid.to_string(),
+                            agent_id,
+                            name,
+                            endpoints,
+                            reachable,
+                            last_seen,
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback to local cache
+    if world_summary.is_none() {
+        let db = state.agent_db.lock().unwrap();
+        let local_worlds = db.find_by_capability("world:");
+
+        // Try to find by protocol ID (agent_id) or by slug (from capability)
+        for lw in local_worlds {
+            let cap = lw.capabilities.iter().find(|c| c.starts_with("world:")).cloned().unwrap_or_default();
+            let slug = cap.strip_prefix("world:").unwrap_or("");
+
+            // Match by protocol ID or slug
+            if lw.agent_id == world_id || slug == world_id {
+                world_summary = Some(WorldSummary {
+                    world_id: slug.to_string(),
+                    agent_id: lw.agent_id.clone(),
+                    name: if lw.alias.is_empty() { slug.to_string() } else { lw.alias.clone() },
+                    endpoints: lw.endpoints.clone(),
+                    reachable: !lw.endpoints.is_empty(),
+                    last_seen: lw.last_seen,
+                });
+                break;
+            }
+        }
+    }
+
+    let world = world_summary.ok_or(StatusCode::NOT_FOUND)?;
+
+    // Try to fetch manifest from world endpoint
+    let mut manifest: Option<WorldManifest> = None;
+    if !world.endpoints.is_empty() {
+        let sorted = {
+            let mut eps = world.endpoints.clone();
+            eps.sort_by_key(|e| e.priority);
+            eps
+        };
+
+        for ep in sorted {
+            let url = if ep.address.contains(':') && !ep.address.contains('.') {
+                format!("http://[{}]:{}/world/manifest", ep.address, ep.port)
+            } else {
+                format!("http://{}:{}/world/manifest", ep.address, ep.port)
+            };
+
+            if let Ok(resp) = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                reqwest::get(&url)
+            ).await {
+                if let Ok(resp) = resp {
+                    if let Ok(data) = resp.json::<serde_json::Value>().await {
+                        if let Some(m) = data.get("manifest") {
+                            manifest = serde_json::from_value(m.clone()).ok();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Json(WorldInfoResponse {
+        world_id: world.world_id,
+        name: world.name,
+        endpoints: world.endpoints,
+        reachable: world.reachable,
+        manifest,
+    }))
 }
 
 async fn handle_ping() -> Json<OkResponse> {

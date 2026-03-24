@@ -85,7 +85,7 @@ export async function createWorldServer(
   const resolvedPublicPort = publicPort ?? port;
 
   const identity = loadOrCreateIdentity(dataDir, "world-identity");
-  const protocolWorldId = identity.agentId
+  const protocolWorldId = identity.agentId;
   console.log(
     `[world] agentId=${identity.agentId} world=${worldId} name="${worldName}"`
   );
@@ -95,32 +95,48 @@ export async function createWorldServer(
   // Track agents currently in world for idle eviction
   const agentLastSeen = new Map<string, number>();
   // Track agent endpoints for world-scoped member discovery
-  const agentEndpoints = new Map<string, { alias: string; endpoints: Endpoint[] }>();
+  const agentEndpoints = new Map<
+    string,
+    { alias: string; endpoints: Endpoint[] }
+  >();
+  // Cache manifest from first join for public /world/manifest endpoint
+  // Initialize with basic info so /world/manifest works before any join
+  let cachedManifest: WorldManifest | null = buildManifest({
+    name: worldName,
+    type: worldType,
+    theme: worldTheme,
+  });
 
   function getMembers(exclude?: string): WorldMember[] {
     const members: WorldMember[] = [];
     for (const [id, info] of agentEndpoints) {
       if (id === exclude) continue;
       if (!agentLastSeen.has(id)) continue;
-      members.push({ agentId: id, alias: info.alias, endpoints: info.endpoints });
+      members.push({
+        agentId: id,
+        alias: info.alias,
+        endpoints: info.endpoints,
+      });
     }
     return members;
   }
 
   function getBroadcastRecipientIds(): string[] {
-    const recipients: string[] = []
+    const recipients: string[] = [];
     for (const agentId of agentLastSeen.keys()) {
-      const member = agentEndpoints.get(agentId)
-      if (!member?.endpoints.length) continue
-      recipients.push(agentId)
+      const member = agentEndpoints.get(agentId);
+      if (!member?.endpoints.length) continue;
+      recipients.push(agentId);
     }
-    return recipients
+    return recipients;
   }
 
   // Append-only event ledger — blockchain-inspired agent activity log
   const ledger = new WorldLedger(dataDir, worldId, identity);
   console.log(
-    `[world] Ledger loaded — ${ledger.length} entries, head=${ledger.head?.hash.slice(0, 8) ?? "none"}`
+    `[world] Ledger loaded — ${ledger.length} entries, head=${
+      ledger.head?.hash.slice(0, 8) ?? "none"
+    }`
   );
 
   const fastify = Fastify({ logger: false });
@@ -163,11 +179,15 @@ export async function createWorldServer(
           agentEndpoints.set(agentId, { alias, endpoints: joinEndpoints });
           const result = await hooks.onJoin(agentId, data);
           ledger.append("world.join", agentId, alias || undefined);
+          const manifest = buildManifest(result.manifest);
+          if (!cachedManifest) {
+            cachedManifest = manifest;
+          }
           sendReply({
             ok: true,
             worldId: protocolWorldId,
             slug: worldId,
-            manifest: buildManifest(result.manifest),
+            manifest,
             state: result.state,
             members: getMembers(agentId),
           });
@@ -203,7 +223,9 @@ export async function createWorldServer(
           }
           agentLastSeen.set(agentId, Date.now());
           const { ok, state } = await hooks.onAction(agentId, data);
-          ledger.append("world.action", agentId, undefined, { action: data["action"] as string | undefined });
+          ledger.append("world.action", agentId, undefined, {
+            action: data["action"] as string | undefined,
+          });
           sendReply({ ok, state });
           return;
         }
@@ -219,7 +241,8 @@ export async function createWorldServer(
     const query = req.query as Record<string, string>;
     const opts: LedgerQueryOpts = {};
     if (query.agent_id) opts.agentId = query.agent_id;
-    if (query.event) opts.event = query.event.split(",") as LedgerQueryOpts["event"];
+    if (query.event)
+      opts.event = query.event.split(",") as LedgerQueryOpts["event"];
     if (query.since) opts.since = parseInt(query.since);
     if (query.until) opts.until = parseInt(query.until);
     if (query.limit) opts.limit = parseInt(query.limit);
@@ -264,6 +287,24 @@ export async function createWorldServer(
     return { ok: true, worldId, members: getMembers() };
   });
 
+  fastify.get("/world/manifest", async () => {
+    return {
+      ok: true,
+      worldId: protocolWorldId,
+      slug: worldId,
+      name: worldName,
+      theme: worldTheme,
+      type: worldType,
+      manifest: cachedManifest ?? {
+        name: worldName,
+        type: worldType,
+        theme: worldTheme,
+        description:
+          "No manifest available yet — join the world to populate it",
+      },
+    };
+  });
+
   // Allow caller to register additional routes before listen
   if (setupRoutes) await setupRoutes(fastify);
 
@@ -279,7 +320,7 @@ export async function createWorldServer(
       theme: worldTheme,
       ...((state as object) ?? {}),
     };
-    const recipientIds = getBroadcastRecipientIds()
+    const recipientIds = getBroadcastRecipientIds();
     if (!recipientIds.length) return;
 
     const payload: Record<string, unknown> = {
@@ -297,8 +338,8 @@ export async function createWorldServer(
 
     await Promise.allSettled(
       recipientIds.map(async (agentId) => {
-        const member = agentEndpoints.get(agentId)
-        if (!member?.endpoints.length) return
+        const member = agentEndpoints.get(agentId);
+        if (!member?.endpoints.length) return;
         await Promise.allSettled(
           [...member.endpoints]
             .sort((a, b) => a.priority - b.priority)
@@ -328,7 +369,7 @@ export async function createWorldServer(
                 /* try other endpoints */
               }
             })
-        )
+        );
       })
     );
   }

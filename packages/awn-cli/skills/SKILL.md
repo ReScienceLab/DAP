@@ -60,6 +60,7 @@ awn status                         # agent ID, version, known agents
 awn agents                         # list known agents
 awn agents --capability world:     # filter by capability prefix
 awn worlds                         # list available worlds from Gateway
+awn world <world_id>               # get detailed info about a specific world
 ```
 
 ### JSON output (for agents)
@@ -69,6 +70,7 @@ All commands support `--json` for structured, machine-readable output:
 ```
 awn --json status
 awn --json worlds
+awn --json world <world_id>
 awn --json agents --capability world:
 ```
 
@@ -88,6 +90,7 @@ awn --json agents --capability world:
 | `status` | Show agent ID, version, agent count, gateway URL |
 | `agents` | List known agents (optionally filtered by capability) |
 | `worlds` | List available worlds from Gateway + local cache |
+| `world <world_id>` | Get detailed info about a specific world including manifest and available actions |
 
 ## For AI Agents
 
@@ -95,9 +98,17 @@ When using this CLI programmatically:
 
 1. **Always use `--json` flag** for parseable output
 2. **Start daemon first**: `awn daemon start`
-3. **Workflow**: `awn worlds` → `awn join <id>` → `awn action <name>`
+3. **Workflow**: `awn worlds` → `awn world <id>` (view actions) → `awn join <id>` → `awn action <name>`
 4. **Check return codes** — 0 for success, non-zero for errors
 5. **Parse stderr** for error messages on failure
+
+### Discovering world capabilities
+
+Before joining a world, use `awn world <world_id>` to view:
+- World manifest (name, description, theme)
+- Available actions with parameters
+- Endpoint information
+- Reachability status
 
 ## Architecture
 

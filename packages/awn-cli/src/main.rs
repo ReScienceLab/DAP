@@ -38,6 +38,11 @@ enum Commands {
     },
     /// List available worlds from the Gateway
     Worlds,
+    /// Get detailed info about a specific world
+    World {
+        /// World ID to query
+        world_id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -246,6 +251,71 @@ async fn main() {
                         println!("{}", serde_json::json!({"error": "AWN daemon not running. Start with: awn daemon start"}));
                     } else {
                         eprintln!("AWN daemon not running. Start with: awn daemon start");
+                    }
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::World { ref world_id } => {
+            let ipc = resolve_ipc_port_raw(cli_ipc_port);
+            let encoded_id = urlencoding(world_id);
+            let url = format!("http://127.0.0.1:{ipc}/ipc/world/{encoded_id}");
+            match reqwest::get(&url).await {
+                Ok(resp) => {
+                    if let Ok(data) = resp.json::<daemon::WorldInfoResponse>().await {
+                        if cli.json {
+                            println!("{}", serde_json::to_string(&data).unwrap());
+                        } else {
+                            println!("=== World Info ===");
+                            println!("World ID:      {}", data.world_id);
+                            println!("Name:          {}", data.name);
+                            println!("Status:        {}", if data.reachable { "reachable" } else { "no endpoint" });
+                            if !data.endpoints.is_empty() {
+                                println!("\nEndpoints:");
+                                for ep in &data.endpoints {
+                                    println!("  {}://{}:{} (priority: {})", ep.transport, ep.address, ep.port, ep.priority);
+                                }
+                            }
+                            if let Some(manifest) = &data.manifest {
+                                println!("\nManifest:");
+                                println!("  Name:        {}", manifest.name);
+                                if let Some(desc) = &manifest.description {
+                                    println!("  Description: {}", desc);
+                                }
+                                if let Some(theme) = &manifest.theme {
+                                    println!("  Theme:       {}", theme);
+                                }
+                                if let Some(actions) = &manifest.actions {
+                                    println!("\n  Actions:");
+                                    for (action_name, action) in actions {
+                                        println!("    {} — {}", action_name, action.desc);
+                                        if let Some(params) = &action.params {
+                                            for (param_name, param) in params {
+                                                let req = if param.required.unwrap_or(false) { "required" } else { "optional" };
+                                                println!("      • {} ({}): {}", param_name, param.param_type, req);
+                                                if let Some(desc) = &param.desc {
+                                                    println!("        {}", desc);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        if cli.json {
+                            println!("{}", serde_json::json!({"error": "Failed to parse world info"}));
+                        } else {
+                            eprintln!("Failed to parse world info");
+                        }
+                        std::process::exit(1);
+                    }
+                }
+                Err(_) => {
+                    if cli.json {
+                        println!("{}", serde_json::json!({"error": "Failed to fetch world info"}));
+                    } else {
+                        eprintln!("Failed to fetch world info. Make sure the daemon is running and the world ID is correct.");
                     }
                     std::process::exit(1);
                 }
