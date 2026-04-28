@@ -7,50 +7,18 @@ description: SEO & GEO (Generative Engine Optimization) for websites. Analyze ke
 
 Comprehensive SEO and GEO (Generative Engine Optimization) for websites. Optimize for both traditional search engines (Google, Bing) and AI search engines (ChatGPT, Perplexity, Gemini, Copilot, Claude).
 
-## Quick Reference
-
-**GEO = Generative Engine Optimization** - Optimizing content to be cited by AI search engines.
-
-**Key Insight:** AI search engines don't rank pages - they **cite sources**. Being cited is the new "ranking #1".
-
 ## Workflow
 
 ### Step 1: Website Audit
 
 Get the target URL and analyze current SEO/GEO status.
 
-**Basic SEO Audit (Free):**
 ```bash
 python3 scripts/seo_audit.py "https://example.com"
-```
-**Use this for**: Quick technical SEO check (title, meta, H1, robots, sitemap, load time). No API needed.
-
----
-
-**Check Meta Tags:**
-```bash
 curl -sL "https://example.com" | grep -E "<title>|<meta name=\"description\"|<meta property=\"og:|application/ld\+json" | head -20
-```
-
-**Use this for**: Quick check of essential meta tags and schema markup on any webpage.
-
----
-
-**Check robots.txt:**
-```bash
 curl -s "https://example.com/robots.txt"
-```
-
-**Use this for**: Verify which bots are allowed/blocked. Critical for ensuring AI search engines can crawl your site.
-
----
-
-**Check sitemap:**
-```bash
 curl -s "https://example.com/sitemap.xml" | head -50
 ```
-
-**Use this for**: Verify sitemap structure and ensure all important pages are included for search engine discovery.
 
 **Verify AI Bot Access:**
 ```

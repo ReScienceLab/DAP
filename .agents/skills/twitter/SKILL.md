@@ -92,6 +92,14 @@ python3 scripts/search_tweets.py "AI filter:media"
 python3 scripts/search_tweets.py "AI min_faves:1000"
 ```
 
+## Error Handling
+
+| Error | Cause | Fix |
+|---|---|---|
+| `401 Unauthorized` | Missing or invalid API key | Verify `TWITTERAPI_API_KEY` is set in `~/.zshrc` and re-source |
+| `429 Too Many Requests` | Rate limit exceeded | Wait 60 seconds and retry |
+| Empty response / `user not found` | Suspended or non-existent account | Verify the username exists on twitter.com |
+
 ## API: twitterapi.io
 - Base URL: https://api.twitterapi.io/twitter
 - Auth: X-API-Key header

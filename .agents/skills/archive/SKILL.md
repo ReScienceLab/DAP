@@ -27,8 +27,23 @@ Capture, index, and reuse project knowledge across sessions.
 
 1. Read `.archive/MEMORY.md` — check for related existing archives
 2. Create `.archive/YYYY-MM-DD/` directory if needed
-3. Write markdown file with YAML frontmatter (see `references/TEMPLATE.md`)
-4. **Update `.archive/MEMORY.md`**: add one-line entry under the right category
+3. Write markdown file with YAML frontmatter:
+   ```yaml
+   ---
+   tags: [ecs, deploy, fargate]
+   category: infrastructure
+   related: [../2025-03-10/ecs-service-fix.md]
+   ---
+   ## ECS Task Definition Update
+   **Problem:** Deployment failed with "essential container exited"
+   **Fix:** Added `healthCheck` to task definition with 30s start period
+   **Command:** `aws ecs update-service --force-new-deployment`
+   ```
+4. **Update `.archive/MEMORY.md`**: add one-line entry under the right category:
+   ```
+   ### infrastructure
+   - [ECS task definition fix](2025-04-28/ecs-task-definition.md) — healthCheck start period
+   ```
 5. If related archives exist, add `related` field in frontmatter
 
 ## Lookup Workflow
